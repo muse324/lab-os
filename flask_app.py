@@ -7,7 +7,9 @@ import csv
 from io import StringIO
 from openai import OpenAI
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# OpenAIは任意（APIキーがない環境でも動作させる）
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key) if api_key else None
 
 app = Flask(__name__)  # ← これが最重要
 
@@ -1598,28 +1600,31 @@ def quick_add():
     # ChatGPT解析（失敗時はフォールバック）
     import json
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "ユーザーのタスク入力を解析してJSONで返してください。\
-                    フィールド: title, deadline(YYYY-MM-DD or null), priority(high/medium), project_hint",
-                },
-                {"role": "user", "content": text},
-            ],
-        )
+    if client:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "ユーザーのタスク入力を解析してJSONで返してください。\
+                        フィールド: title, deadline(YYYY-MM-DD or null), priority(high/medium), project_hint",
+                    },
+                    {"role": "user", "content": text},
+                ],
+            )
 
-        result = json.loads(response.choices[0].message.content)
+            result = json.loads(response.choices[0].message.content)
 
-        title = result.get("title") or title
-        deadline = result.get("deadline") or deadline
-        priority = result.get("priority") or priority
-        project_hint = result.get("project_hint", "")
+            title = result.get("title") or title
+            deadline = result.get("deadline") or deadline
+            priority = result.get("priority") or priority
+            project_hint = result.get("project_hint", "")
 
-    except Exception as e:
-        print("ChatGPT解析失敗:", e)
+        except Exception as e:
+            print("ChatGPT解析失敗:", e)
+            project_hint = ""
+    else:
         project_hint = ""
 
     # プロジェクトヒントがあればさらにプロジェクト自動判定
