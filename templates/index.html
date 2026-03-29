@@ -5,8 +5,9 @@
     </head>
     <body>
         <h1>Lab OS Dashboard</h1>
-        <form id="deployForm" action="/deploy" method="post">
+        <form id="deployForm" onsubmit="runDeploy(event)">
             <button type="submit">最新コードに更新</button>
+            <span id="deployResult" style="margin-left:10px;"></span>
         </form>
 
         <!-- タスクインポート / 同期 -->
@@ -256,6 +257,32 @@
             form.appendChild(input);
             document.body.appendChild(form);
             form.submit();
+        }
+        // --- デプロイ実行 ---
+        async function runDeploy(event) {
+            event.preventDefault();
+
+            const resultEl = document.getElementById("deployResult");
+            resultEl.textContent = "実行中...";
+
+            try {
+                const res = await fetch("/deploy", {
+                    method: "POST"
+                });
+
+                const data = await res.json();
+
+                if (data.status === "success") {
+                    resultEl.textContent = "deployed!";
+                    resultEl.style.color = "green";
+                } else {
+                    resultEl.textContent = "エラー: " + data.message;
+                    resultEl.style.color = "red";
+                }
+            } catch (e) {
+                resultEl.textContent = "通信エラー: " + e;
+                resultEl.style.color = "red";
+            }
         }
         </script>
         <!-- クイック入力 -->

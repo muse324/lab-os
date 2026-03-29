@@ -1808,10 +1808,27 @@ def sync_apply():
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
+    import subprocess
     import os
+    try:
+        result = subprocess.run(
+            ["bash", os.path.expanduser("~/deploy.sh")],
+            capture_output=True,
+            text=True,
+        )
 
-    os.system("bash ~/deploy.sh")
-    return "deployed"
+        if result.returncode == 0:
+            return jsonify({"status": "success", "message": "deployed!"})
+        else:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": result.stderr or "Unknown error",
+                }
+            ), 500
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == "__main__":
