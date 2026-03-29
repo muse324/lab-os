@@ -1,10 +1,24 @@
+from io import StringIO
 from flask import Flask, render_template, request, redirect, jsonify
 import sqlite3
 import os
 import re
 import requests
 import csv
-from io import StringIO
+
+
+# ===== 全角→半角クォート正規化 =====
+def normalize_quotes(text):
+    if not text:
+        return text
+    return (
+        text.replace("“", '"')
+        .replace("”", '"')
+        .replace("＂", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+
 
 # OpenAIは任意（未インストールでもOK）
 try:
@@ -119,6 +133,9 @@ PROJECT_RULES = {
         "音響処理",
         "投影",
         "インスタレーション",
+        "イベント",
+        "展示",
+        "いこてん",
     ],
     "プロジェクト（JRビエラ展示）": [
         "JRビエラ",
@@ -171,8 +188,15 @@ PROJECT_RULES = {
 
 def get_db():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    conn = sqlite3.connect(os.path.join(BASE_DIR, "db.sqlite3"))
-    conn.row_factory = sqlite3.Row  # ←ここに追加
+    conn = sqlite3.connect(
+        os.path.join(BASE_DIR, "db.sqlite3"), timeout=5, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+
+    # ロック対策
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+
     return conn
 
 
@@ -303,41 +327,67 @@ def init_db():
         """
     )
 
+    # ===== deadline正規化（空文字→NULL） =====
+    c.execute("UPDATE tasks SET deadline=NULL WHERE deadline=''")
+    c.execute("UPDATE tasks SET original_deadline=NULL WHERE original_deadline=''")
+
     conn.commit()
     conn.close()
 
+
 def build_delta(cursor):
-    current = cursor.execute("""
+    current_rows = cursor.execute(
+        """
         SELECT sync_key, title, deadline, project_id, student_id, priority, status
         FROM tasks
-        WHERE archived=0
-    """).fetchall()
+        WHERE archived=0 AND sync_key IS NOT NULL
+    """
+    ).fetchall()
 
+    current = {row["sync_key"]: row for row in current_rows}
     snapshot = {
         row["sync_key"]: row
         for row in cursor.execute("SELECT * FROM sync_snapshot").fetchall()
     }
 
-    delta = {
-        "added": [],
-        "updated": [],
-        "deleted": []
-    }
+    delta = {"added": [], "updated": [], "deleted": []}
+    tracked_fields = ["title", "deadline", "project_id", "student_id", "priority", "status"]
 
-    for row in current:
-        sk = row["sync_key"]
-        if sk not in snapshot:
-            delta["added"].append(dict(row))
-        else:
-            old = snapshot[sk]
-            if any(row[f] != old[f] for f in ["title","deadline","project_id","priority","status"]):
-                delta["updated"].append(dict(row))
+    for sync_key, row in current.items():
+        row_dict = dict(row)
 
-    for sk in snapshot:
-        if sk not in {r["sync_key"] for r in current}:
-            delta["deleted"].append(sk)
+        if sync_key not in snapshot:
+            delta["added"].append(row_dict)
+            continue
+
+        old = snapshot[sync_key]
+        changes = []
+        for field in tracked_fields:
+            old_value = old[field]
+            new_value = row[field]
+            if old_value != new_value:
+                changes.append({"field": field, "old": old_value, "new": new_value})
+
+        if changes:
+            row_dict["changes"] = changes
+            delta["updated"].append(row_dict)
+
+    for sync_key, old in snapshot.items():
+        if sync_key not in current:
+            delta["deleted"].append(
+                {
+                    "sync_key": sync_key,
+                    "title": old["title"],
+                    "deadline": old["deadline"],
+                    "project_id": old["project_id"],
+                    "student_id": old["student_id"],
+                    "priority": old["priority"],
+                    "status": old["status"],
+                }
+            )
 
     return delta
+
 
 def format_date_jp(date_str):
     if not date_str:
@@ -388,87 +438,79 @@ def format_history_rows(rows):
     return result
 
 
+# --- Apply deadline/formatting for tasks ---
+def apply_format(rows):
+    result = []
+    for r in rows:
+        d = dict(r)
+
+        if "deadline" in d and d["deadline"]:
+            d["deadline_display"] = format_date_jp(d["deadline"])
+        else:
+            d["deadline_display"] = None
+
+        if "original_deadline" in d and d["original_deadline"]:
+            d["original_deadline_display"] = format_date_jp(d["original_deadline"])
+        else:
+            d["original_deadline_display"] = None
+
+        result.append(d)
+
+    return result
+
+
+# --- Helper functions for fetching tasks/projects ---
+def fetch_home_task_rows(
+    cursor, where_clause, params=(), order_by="tasks.deadline IS NULL, tasks.deadline"
+):
+    query = f"""
+        SELECT
+            tasks.id AS task_id,
+            tasks.title AS title,
+            projects.id AS project_id,
+            projects.name AS project_name,
+            tasks.deadline AS deadline,
+            tasks.priority AS priority,
+            tasks.original_deadline AS original_deadline
+        FROM tasks
+        LEFT JOIN projects ON tasks.project_id = projects.id
+        WHERE tasks.status != 'done'
+          AND tasks.archived = 0
+          AND ({where_clause})
+        ORDER BY {order_by}
+    """
+    return cursor.execute(query, params).fetchall()
+
+
+def fetch_done_task_rows(cursor):
+    return cursor.execute(
+        """
+        SELECT tasks.id, tasks.title AS title, projects.name AS name, tasks.status
+        FROM tasks
+        LEFT JOIN projects ON tasks.project_id = projects.id
+        WHERE tasks.status = 'done' AND tasks.archived = 0
+        ORDER BY tasks.id DESC
+        """
+    ).fetchall()
+
+
+def fetch_all_projects(cursor):
+    return cursor.execute("SELECT * FROM projects").fetchall()
+
+
 @app.route("/")
 def home():
     conn = get_db()
     c = conn.cursor()
 
-    today = c.execute(
-        """
-        SELECT tasks.id AS task_id, tasks.title AS title, projects.id AS project_id, projects.name AS project_name, tasks.deadline AS deadline, tasks.priority AS priority, tasks.original_deadline AS original_deadline
-        FROM tasks
-        LEFT JOIN projects ON tasks.project_id = projects.id
-        WHERE tasks.status != 'done'
-        AND tasks.deadline = date('now')
-    """
-    ).fetchall()
-
-    overdue = c.execute(
-        """
-        SELECT tasks.id AS task_id, tasks.title AS title, projects.id AS project_id, projects.name AS project_name, tasks.deadline AS deadline, tasks.priority AS priority, tasks.original_deadline AS original_deadline
-        FROM tasks
-        LEFT JOIN projects ON tasks.project_id = projects.id
-        WHERE tasks.status != 'done'
-        AND tasks.deadline < date('now')
-    """
-    ).fetchall()
-
-    # 未完了タスク（期限あり）
-    tasks_todo = c.execute(
-        """
-        SELECT tasks.id AS task_id, tasks.title AS title, projects.id AS project_id, projects.name AS project_name, tasks.deadline AS deadline, tasks.priority AS priority, tasks.original_deadline AS original_deadline
-        FROM tasks
-        LEFT JOIN projects ON tasks.project_id = projects.id
-        WHERE tasks.status != 'done'
-        AND (
-            tasks.deadline > date('now')
-        )
-        ORDER BY tasks.deadline IS NULL, tasks.deadline
-    """
-    ).fetchall()
-
-    # 未完了タスク（期限なし）
-    tasks_todo_anytime = c.execute(
-        """
-        SELECT tasks.id AS task_id, tasks.title AS title, projects.id AS project_id, projects.name AS project_name, tasks.deadline AS deadline, tasks.priority AS priority, tasks.original_deadline AS original_deadline
-        FROM tasks
-        LEFT JOIN projects ON tasks.project_id = projects.id
-        WHERE tasks.status != 'done'
-        AND (
-            tasks.deadline IS NULL
-        )
-        ORDER BY tasks.deadline IS NULL, tasks.deadline
-    """
-    ).fetchall()
-    tasks_done = c.execute(
-        """
-    SELECT tasks.id, tasks.title AS title, projects.name AS name, tasks.status
-    FROM tasks
-    LEFT JOIN projects ON tasks.project_id = projects.id
-    WHERE tasks.status = 'done'
-"""
-    ).fetchall()
-
-    projects = c.execute("SELECT * FROM projects").fetchall()
-
-    def apply_format(rows):
-        result = []
-        for r in rows:
-            d = dict(r)
-
-            if "deadline" in d and d["deadline"]:
-                d["deadline_display"] = format_date_jp(d["deadline"])
-            else:
-                d["deadline_display"] = None
-
-            if "original_deadline" in d and d["original_deadline"]:
-                d["original_deadline_display"] = format_date_jp(d["original_deadline"])
-            else:
-                d["original_deadline_display"] = None
-
-            result.append(d)
-
-        return result
+    today = fetch_home_task_rows(c, "tasks.deadline = date('now')")
+    overdue = fetch_home_task_rows(c, "tasks.deadline < date('now')")
+    tasks_todo = fetch_home_task_rows(c, "tasks.deadline > date('now')")
+    tasks_todo_anytime = fetch_home_task_rows(
+        c, "tasks.deadline IS NULL OR tasks.deadline = ''"
+    )
+    tasks_done = fetch_done_task_rows(c)
+    projects = fetch_all_projects(c)
 
     today = apply_format(today)
     overdue = apply_format(overdue)
@@ -486,6 +528,7 @@ def home():
         tasks_done=tasks_done,
         tasks_todo_anytime=tasks_todo_anytime,
         is_production=os.getenv("IS_PRODUCTION") == "1",
+        students=STUDENTS_DATA,
     )
 
 
@@ -509,7 +552,7 @@ def inbox_view():
         (inbox["id"],),
     ).fetchall()
 
-    projects = c.execute("SELECT id, name FROM projects").fetchall()
+    projects = fetch_all_projects(c)
     conn.close()
 
     return render_template("inbox_review.html", tasks=tasks, projects=projects)
@@ -579,6 +622,7 @@ def students_index():
     names = [s["name"] for s in students]
 
     return render_template("students.html", students=names)
+
 
 
 @app.route("/student_log")
@@ -662,11 +706,84 @@ def student_log():
     )
 
 
+# === student_summary API ===
+@app.route("/student_summary")
+def student_summary():
+    student_name = request.args.get("name", "")
+    if not student_name:
+        return jsonify({"error": "name is required"}), 400
+
+    matched_students = [
+        s for s in STUDENTS_DATA if s.get("name") == student_name and s.get("student_id")
+    ]
+    if not matched_students:
+        return jsonify({"error": "student not found"}), 404
+
+    student_id = matched_students[0]["student_id"]
+
+    conn = get_db()
+    c = conn.cursor()
+
+    todo_count = c.execute(
+        """
+        SELECT COUNT(*)
+        FROM tasks
+        WHERE student_id = ? AND archived = 0 AND status != 'done'
+        """,
+        (student_id,),
+    ).fetchone()[0]
+
+    done_count = c.execute(
+        """
+        SELECT COUNT(*)
+        FROM tasks
+        WHERE student_id = ? AND archived = 0 AND status = 'done'
+        """,
+        (student_id,),
+    ).fetchone()[0]
+
+    overdue_count = c.execute(
+        """
+        SELECT COUNT(*)
+        FROM tasks
+        WHERE student_id = ? AND archived = 0 AND status != 'done'
+          AND deadline IS NOT NULL AND deadline != '' AND deadline < date('now')
+        """,
+        (student_id,),
+    ).fetchone()[0]
+
+    next_tasks = c.execute(
+        """
+        SELECT title, deadline
+        FROM tasks
+        WHERE student_id = ? AND archived = 0 AND status != 'done'
+        ORDER BY deadline IS NULL, deadline
+        LIMIT 3
+        """,
+        (student_id,),
+    ).fetchall()
+
+    conn.close()
+
+    return jsonify(
+        {
+            "name": student_name,
+            "student_id": student_id,
+            "todo_count": todo_count,
+            "done_count": done_count,
+            "overdue_count": overdue_count,
+            "next_tasks": [
+                {"title": row["title"], "deadline": row["deadline"]} for row in next_tasks
+            ],
+        }
+    )
+
+
 @app.route("/projects")
 def projects():
     conn = get_db()
     c = conn.cursor()
-    projects = c.execute("SELECT * FROM projects").fetchall()
+    projects = fetch_all_projects(c)
     conn.close()
 
     return render_template("projects.html", projects=projects)
@@ -693,7 +810,7 @@ def add_project():
 def add_task():
     title = request.form["title"]
     project_id = request.form["project_id"]
-    deadline = request.form["deadline"]
+    deadline = request.form.get("deadline") or None
     priority = request.form.get("priority", "medium")
     student_id = request.form.get("student_id")
 
@@ -720,12 +837,11 @@ def add_task():
 def done_task(task_id):
     conn = get_db()
     c = conn.cursor()
-
-    c.execute("UPDATE tasks SET status='done' WHERE id=?", (task_id,))
-
-    conn.commit()
-    conn.close()
-
+    try:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return redirect("/")
 
 
@@ -793,6 +909,7 @@ def project_detail(project_id):
         tasks=tasks,
         notes=notes,
         history=history,
+        students=STUDENTS_DATA,
     )
 
 
@@ -821,39 +938,6 @@ def add_note():
     return redirect("/project/" + project_id)
 
 
-def guess_project(text, projects):
-    # ===== 学生名は最優先 =====
-    for name in STUDENTS:
-        if name and name in text:
-            for p in projects:
-                if p["name"] == "学生指導":
-                    return p["id"]
-
-    scores = {}
-
-    for project_name, keywords in PROJECT_RULES.items():
-        score = 0
-        for kw in keywords:
-            if kw in text:
-                score += 1
-
-        if score > 0:
-            scores[project_name] = score
-
-    if not scores:
-        return None  # Inboxへ
-
-    # 最大スコア
-    best_project = max(scores, key=scores.get)
-
-    # projectsテーブルからid取得
-    for p in projects:
-        if p["name"] == best_project:
-            return p["id"]
-
-    return None
-
-
 def guess_student_id(text):
     for s in STUDENTS_DATA:
         name = s.get("name")
@@ -861,6 +945,133 @@ def guess_student_id(text):
         if name and student_id and name in text:
             return student_id
     return None
+
+
+# ===== タスクタイトル正規化 =====
+def normalize_task_title(text):
+    title = text or ""
+
+    leading_patterns = [
+        r"^今日中に",
+        r"^今日までに",
+        r"^明日までに",
+        r"^明後日までに",
+        r"^来週までに",
+        r"^今週中に",
+        r"^至急",
+        r"^急ぎで",
+        r"^急ぎ",
+        r"^重要",
+    ]
+    for pattern in leading_patterns:
+        title = re.sub(pattern, "", title)
+
+    trailing_patterns = [
+        r"（重要）$",
+        r"\(重要\)$",
+        r"【重要】$",
+        r"\[重要\]$",
+        r"（急ぎ）$",
+        r"\(急ぎ\)$",
+        r"【急ぎ】$",
+        r"\[急ぎ\]$",
+        r"（至急）$",
+        r"\(至急\)$",
+        r"【至急】$",
+        r"\[至急\]$",
+    ]
+    for pattern in trailing_patterns:
+        title = re.sub(pattern, "", title)
+
+    title = re.sub(r"\s+", " ", title).strip()
+    return title or (text or "").strip()
+
+
+# ===== プロジェクト解決（統合スコアリング） =====
+def resolve_project_id_from_text(text, projects, default_project_id=None):
+    text = text or ""
+
+    # 1. 学生優先
+    for name in STUDENTS:
+        if name and name in text:
+            for p in projects:
+                if p["name"] == "学生指導":
+                    return p["id"]
+
+    # 2. スコアリング
+    scores = {}
+
+    for project_name, keywords in PROJECT_RULES.items():
+        score = 0
+        for kw in keywords:
+            if kw in text:
+                score += 2  # ルール一致は強め
+
+        # プロジェクト名そのもの一致はさらに強く
+        if project_name in text:
+            score += 3
+
+        if score > 0:
+            scores[project_name] = score
+
+    # 3. エイリアス補正
+    aliases = {
+        "メディア": "授業（メディア情報学）",
+        "音情": "授業（音情報処理）",
+        "研究室": "研究室運営OS",
+        "OS": "研究室運営OS",
+    }
+
+    for key, val in aliases.items():
+        if key in text:
+            scores[val] = scores.get(val, 0) + 2
+
+    # 4. スコア最大を選択
+    if scores:
+        best_project_name = max(scores, key=scores.get)
+        for p in projects:
+            if p["name"] == best_project_name:
+                return p["id"]
+
+    # 5. フォールバック
+    return default_project_id
+
+
+# ===== ChatGPTフォールバック解析 =====
+def parse_task_with_chatgpt(text, default_title, default_deadline, default_priority):
+    import json
+
+    result_data = {
+        "title": default_title,
+        "deadline": default_deadline,
+        "priority": default_priority,
+        "project_hint": "",
+    }
+
+    if not client:
+        return result_data
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "ユーザーのタスク入力を解析してJSONで返してください。                        フィールド: title, deadline(YYYY-MM-DD or null), priority(high/medium), project_hint",
+                },
+                {"role": "user", "content": text},
+            ],
+        )
+
+        parsed = json.loads(response.choices[0].message.content)
+        result_data["title"] = parsed.get("title") or default_title
+        result_data["deadline"] = parsed.get("deadline") or default_deadline
+        result_data["priority"] = parsed.get("priority") or default_priority
+        result_data["project_hint"] = parsed.get("project_hint", "")
+    except Exception as e:
+        print("ChatGPT解析失敗:", e)
+
+    return result_data
 
 
 # sync_key自動生成
@@ -1175,7 +1386,9 @@ def local_generate_sync_tasks(memo_text):
 
 
 def resolve_project_id(cursor, project_name):
-    # 指定プロジェクトがあればそれを優先
+    projects = fetch_all_projects(cursor)
+
+    # 明示指定があれば優先
     if project_name:
         row = cursor.execute(
             "SELECT id FROM projects WHERE name=? LIMIT 1",
@@ -1183,6 +1396,13 @@ def resolve_project_id(cursor, project_name):
         ).fetchone()
         if row:
             return row["id"]
+
+        # 明示指定でも見つからない場合はテキストとして解釈
+        resolved = resolve_project_id_from_text(project_name, projects, None)
+        if resolved:
+            return resolved
+
+    # project_nameが無い場合もテキスト推定は行わない（sync用途のため）
 
     # 見つからない場合は Inbox にフォールバック
     inbox = cursor.execute(
@@ -1212,7 +1432,7 @@ def normalize_sync_item(item, cursor):
     return {
         "sync_key": sync_key,
         "title": item.get("title"),
-        "deadline": item.get("deadline"),
+        "deadline": item.get("deadline") or None,
         "project_id": project_id,
         "project_name": project_name,
         "student_id": item.get("student_id"),
@@ -1246,8 +1466,8 @@ def create_task_from_sync(cursor, normalized):
         (
             normalized["title"],
             normalized["status"],
-            normalized["deadline"],
-            normalized["deadline"],
+            normalized["deadline"] or None,
+            normalized["deadline"] or None,
             normalized["project_id"],
             normalized["student_id"],
             normalized["priority"],
@@ -1315,6 +1535,11 @@ def build_sync_diff(imported_items, cursor):
     source_types = set()
 
     for item in imported_items:
+        # 不正データ防御（文字列などをスキップ）
+        if not isinstance(item, dict):
+            results["errors"].append({"error": "invalid_item_type", "value": str(item)})
+            continue
+
         normalized = normalize_sync_item(item, cursor)
         sync_key = normalized["sync_key"]
         imported_sync_keys.add(sync_key)
@@ -1363,333 +1588,62 @@ def build_sync_diff(imported_items, cursor):
     return results
 
 
-# 簡易追加ルート
+# ===== クイックタスクペイロード構築 =====
+def build_quick_task_payload(text, cursor):
+    normalized_text = normalize_quotes(text)
+    inbox = cursor.execute(
+        "SELECT id FROM projects WHERE name='Inbox' LIMIT 1"
+    ).fetchone()
+    default_project_id = inbox["id"] if inbox else None
+
+    projects = fetch_all_projects(cursor)
+    title = normalize_task_title(normalized_text)
+    project_id = resolve_project_id_from_text(
+        normalized_text, projects, default_project_id
+    )
+    student_id = guess_student_id(normalized_text)
+    deadline = local_extract_deadline(normalized_text)
+    priority = local_extract_priority(normalized_text)
+
+    parsed = parse_task_with_chatgpt(normalized_text, title, deadline, priority)
+    title = parsed["title"]
+    deadline = parsed["deadline"]
+    priority = parsed["priority"]
+    project_hint = parsed["project_hint"]
+
+    if project_hint:
+        resolved = resolve_project_id_from_text(project_hint, projects, project_id)
+        if resolved:
+            project_id = resolved
+
+    return {
+        "title": title,
+        "project_id": project_id,
+        "student_id": student_id,
+        "deadline": deadline,
+        "priority": priority,
+    }
+
+
 @app.route("/quick_add", methods=["POST"])
 def quick_add():
     text = request.form["text"]
 
-    # デフォルト値
-    title = text
-    # ===== タイトル整形（動詞ベースを維持） =====
-    # 期限・緊急度などの前置きだけを落とし、行為表現は残す
-    leading_patterns = [
-        r"^今日中に",
-        r"^今日までに",
-        r"^明日までに",
-        r"^明後日までに",
-        r"^来週までに",
-        r"^今週中に",
-        r"^至急",
-        r"^急ぎで",
-        r"^急ぎ",
-        r"^重要",
-    ]
-    for pattern in leading_patterns:
-        title = re.sub(pattern, "", title)
-
-    # 末尾の強調語だけ落とす
-    trailing_patterns = [
-        r"（重要）$",
-        r"\(重要\)$",
-        r"【重要】$",
-        r"\[重要\]$",
-        r"（急ぎ）$",
-        r"\(急ぎ\)$",
-        r"【急ぎ】$",
-        r"\[急ぎ\]$",
-        r"（至急）$",
-        r"\(至急\)$",
-        r"【至急】$",
-        r"\[至急\]$",
-    ]
-    for pattern in trailing_patterns:
-        title = re.sub(pattern, "", title)
-
-    # 余分な空白だけ整理
-    title = re.sub(r"\s+", " ", title).strip()
-
-    if not title:
-        title = text.strip()
     conn = get_db()
     c = conn.cursor()
-
-    inbox = c.execute("SELECT id FROM projects WHERE name='Inbox' LIMIT 1").fetchone()
-    project_id = inbox["id"] if inbox else None
-
-    # project自動判定
-    projects = c.execute("SELECT id, name FROM projects").fetchall()
-    guessed = guess_project(text, projects)
-    if guessed:
-        project_id = guessed
-    # ===== プロジェクトエイリアス =====
-    aliases = {
-        "メディア": "メディア情報学",
-        "研究室": "研究室運営OS",
-        "OS": "研究室運営OS",
-    }
-
-    for key, val in aliases.items():
-        if key in text:
-            for p in projects:
-                if p["name"] == val:
-                    project_id = p["id"]
-                    break
-
-    # プロジェクト名が直接含まれる場合
-    for p in projects:
-        if p["name"] in text:
-            project_id = p["id"]
-            break
-    deadline = None
-    priority = "medium"
-    student_id = guess_student_id(text)
-
-    # ===== ローカル自然言語パーサ強化（拡張） =====
-    from datetime import datetime, timedelta
-
-    today = datetime.now()
-
-    # --- 1) 直接日付（YYYY-MM-DD / M/D） ---
-    m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
-    if m:
-        deadline = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    else:
-        m = re.search(r"(\d{1,2})/(\d{1,2})", text)
-        if m:
-            y = today.year
-            mm, dd = int(m.group(1)), int(m.group(2))
-            try:
-                dt = datetime(y, mm, dd)
-                # 過去なら来年
-                if dt.date() < today.date():
-                    dt = datetime(y + 1, mm, dd)
-                deadline = dt.strftime("%Y-%m-%d")
-            except Exception:
-                pass
-
-    # --- 2) 相対日（今日/明日/明後日/来週） ---
-    if not deadline:
-        if "今日" in text:
-            deadline = today.strftime("%Y-%m-%d")
-        elif "明日" in text:
-            deadline = (today + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif "明後日" in text:
-            deadline = (today + timedelta(days=2)).strftime("%Y-%m-%d")
-        elif "来週" in text:
-            base = today + timedelta(days=7)
-        else:
-            base = today
-
-    # --- 3) 曜日（今週/来週 + 曜日, 単独曜日） ---
-    weekdays = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
-
-    for k, v in weekdays.items():
-        if k + "曜" in text:
-            if "来週" in text:
-                ref = today + timedelta(days=7)
-            elif "今週" in text:
-                ref = today
-            else:
-                ref = today
-
-            days_ahead = (v - ref.weekday() + 7) % 7
-            if days_ahead == 0:
-                days_ahead = 7
-
-            deadline = (ref + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-            break
-
-    # --- 4) 月末（今月末 / 来月末） ---
-    if not deadline:
-        if "今月末" in text or ("月末" in text and "来月" not in text):
-            next_month = datetime(
-                today.year + (today.month // 12), (today.month % 12) + 1, 1
-            )
-            last_day = next_month - timedelta(days=1)
-            deadline = last_day.strftime("%Y-%m-%d")
-        elif "来月末" in text:
-            nm = datetime(
-                today.year + ((today.month + 1) // 12), ((today.month + 1) % 12) + 1, 1
-            )
-            last_day = nm - timedelta(days=1)
-            deadline = last_day.strftime("%Y-%m-%d")
-
-    # --- 5) 「◯日」指定（今月 or 来月） ---
-    if not deadline:
-        m = re.search(r"(\d{1,2})日(まで)?", text)
-        if m:
-            d = int(m.group(1))
-            try:
-                dt = datetime(today.year, today.month, d)
-
-                # 「まで」の場合は未来優先
-                if m.group(2):
-                    if dt.date() < today.date():
-                        y = today.year + (today.month // 12)
-                        mth = (today.month % 12) + 1
-                        dt = datetime(y, mth, d)
-                else:
-                    if dt.date() < today.date():
-                        y = today.year + (today.month // 12)
-                        mth = (today.month % 12) + 1
-                        dt = datetime(y, mth, d)
-
-                deadline = dt.strftime("%Y-%m-%d")
-            except Exception:
-                pass
-
-    # --- 6) 「今週中」「来週中」「今月中」 ---
-    if not deadline:
-        # 今週中 → 金曜
-        if "今週中" in text:
-            target_weekday = 4  # 金曜
-            days_ahead = (target_weekday - today.weekday() + 7) % 7
-            deadline = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # 来週中 → 来週金曜
-        elif "来週中" in text:
-            ref = today + timedelta(days=7)
-            target_weekday = 4
-            days_ahead = (target_weekday - ref.weekday() + 7) % 7
-            deadline = (ref + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # 今月中 → 月末の最終平日
-        elif "今月中" in text:
-            next_month = datetime(
-                today.year + (today.month // 12), (today.month % 12) + 1, 1
-            )
-            last_day = next_month - timedelta(days=1)
-
-            # 土日なら前の金曜に寄せる
-            if last_day.weekday() == 5:  # 土曜
-                last_day = last_day - timedelta(days=1)
-            elif last_day.weekday() == 6:  # 日曜
-                last_day = last_day - timedelta(days=2)
-
-            deadline = last_day.strftime("%Y-%m-%d")
-
-    # --- 7) 「今週前半 / 後半」「今月前半 / 後半」「◯日頃」「ASAP」 ---
-    if not deadline:
-        # ASAP → 今日
-        if "ASAP" in text or "asap" in text:
-            deadline = today.strftime("%Y-%m-%d")
-
-    if not deadline:
-        # 今週前半 → 水曜
-        if "今週前半" in text:
-            target = 2  # 水曜
-            days_ahead = (target - today.weekday() + 7) % 7
-            deadline = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # 今週後半 → 金曜
-        elif "今週後半" in text:
-            target = 4
-            days_ahead = (target - today.weekday() + 7) % 7
-            deadline = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-        # 今月前半 → 15日
-        elif "今月前半" in text:
-            try:
-                dt = datetime(today.year, today.month, 15)
-                deadline = dt.strftime("%Y-%m-%d")
-            except Exception:
-                pass
-
-        # 今月後半 → 月末
-        elif "今月後半" in text:
-            next_month = datetime(
-                today.year + (today.month // 12), (today.month % 12) + 1, 1
-            )
-            last_day = next_month - timedelta(days=1)
-            deadline = last_day.strftime("%Y-%m-%d")
-
-    if not deadline:
-        # ◯日頃 → ±2日の中央値（その日扱い）
-        m = re.search(r"(\d{1,2})日頃", text)
-        if m:
-            d = int(m.group(1))
-            try:
-                dt = datetime(today.year, today.month, d)
-                if dt.date() < today.date():
-                    y = today.year + (today.month // 12)
-                    mth = (today.month % 12) + 1
-                    dt = datetime(y, mth, d)
-                deadline = dt.strftime("%Y-%m-%d")
-            except Exception:
-                pass
-
-    # --- 8) 「週末」「年度末」 ---
-    if not deadline:
-        # 週末 → 今週土曜
-        if "週末" in text:
-            target = 5  # 土曜
-            days_ahead = (target - today.weekday() + 7) % 7
-            if days_ahead == 0:
-                days_ahead = 7
-            deadline = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-
-    if not deadline:
-        # 年度末 → 3月最終平日
-        if "年度末" in text:
-            year = today.year
-            # すでに4月以降なら次年度扱い
-            if today.month >= 4:
-                year += 1
-
-            # 3月末
-            march_end = datetime(year, 3, 31)
-
-            # 土日なら前の金曜へ
-            if march_end.weekday() == 5:
-                march_end = march_end - timedelta(days=1)
-            elif march_end.weekday() == 6:
-                march_end = march_end - timedelta(days=2)
-
-            deadline = march_end.strftime("%Y-%m-%d")
-
-    # 優先度解析
-    if "重要" in text or "急ぎ" in text or "至急" in text:
-        priority = "high"
-
-    # ChatGPT解析（失敗時はフォールバック）
-    import json
-
-    if client:
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "ユーザーのタスク入力を解析してJSONで返してください。\
-                        フィールド: title, deadline(YYYY-MM-DD or null), priority(high/medium), project_hint",
-                    },
-                    {"role": "user", "content": text},
-                ],
-            )
-
-            result = json.loads(response.choices[0].message.content)
-
-            title = result.get("title") or title
-            deadline = result.get("deadline") or deadline
-            priority = result.get("priority") or priority
-            project_hint = result.get("project_hint", "")
-
-        except Exception as e:
-            print("ChatGPT解析失敗:", e)
-            project_hint = ""
-    else:
-        project_hint = ""
-
-    # プロジェクトヒントがあればさらにプロジェクト自動判定
-    for p in projects:
-        if p["name"] in project_hint or p["name"] in text:
-            project_id = p["id"]
-            break
+    payload = build_quick_task_payload(text, c)
 
     c.execute(
         "INSERT INTO tasks (title, status, project_id, deadline, original_deadline, student_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (title, "todo", project_id, deadline, deadline, student_id, priority),
+        (
+            payload["title"],
+            "todo",
+            payload["project_id"],
+            payload["deadline"] or None,
+            payload["deadline"] or None,
+            payload["student_id"],
+            payload["priority"],
+        ),
     )
     conn.commit()
     conn.close()
@@ -1702,19 +1656,23 @@ def quick_add():
 def import_tasks():
     import json
 
-    data = json.loads(request.form["json"])
+    raw = request.form.get("json")
+    raw = normalize_quotes(raw)
+    data = json.loads(raw)
 
     conn = get_db()
     c = conn.cursor()
 
     for t in data:
-        # project取得
-        p = c.execute(
-            "SELECT id FROM projects WHERE name=?",
-            (t["project"],),
-        ).fetchone()
+        # Defensive: skip non-dict
+        if not isinstance(t, dict):
+            continue
 
-        project_id = p["id"] if p else None
+        # Normalize title if missing safety (optional but important)
+        # (no-op for now, but placeholder for further normalization if needed)
+
+        # Unified project resolution
+        project_id = resolve_project_id(c, t.get("project"))
 
         sync_key = t.get("sync_key") or generate_sync_key(t)
 
@@ -1727,11 +1685,11 @@ def import_tasks():
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
-                t["title"],
+                t.get("title"),
                 t.get("status", "todo"),
                 project_id,
-                t.get("deadline"),
-                t.get("deadline"),
+                t.get("deadline") or None,
+                t.get("deadline") or None,
                 t.get("student_id"),
                 t.get("priority", "medium"),
                 sync_key,
@@ -1750,7 +1708,8 @@ def import_tasks():
 # ChatGPTを使わないローカルタスク抽出器
 @app.route("/generate_sync_json", methods=["POST"])
 def generate_sync_json():
-    memo_text = request.form.get("memo", "").strip()
+    memo_text = request.form.get("memo", "")
+    memo_text = normalize_quotes(memo_text).strip()
     if not memo_text:
         return jsonify({"error": "memo is empty"}), 400
 
@@ -1765,7 +1724,22 @@ def generate_sync_json():
 def sync_preview():
     import json
 
-    data = json.loads(request.form["json"])
+    raw_json = request.form.get("json", "")
+    raw_json = normalize_quotes(raw_json)
+
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError:
+        # シングルクォート対応（暫定フォールバック）
+        try:
+            fixed = raw_json.replace("'", '"')
+            data = json.loads(fixed)
+        except Exception as e:
+            return jsonify({"error": f"Invalid JSON: {str(e)}", "raw": raw_json}), 400
+
+    # {"tasks": [...]} 形式対応
+    if isinstance(data, dict) and "tasks" in data:
+        data = data["tasks"]
 
     conn = get_db()
     c = conn.cursor()
@@ -1800,7 +1774,21 @@ def sync_preview():
 def sync_apply():
     import json
 
-    data = json.loads(request.form["json"])
+    raw_json = request.form.get("json", "")
+    raw_json = normalize_quotes(raw_json)
+
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError:
+        try:
+            fixed = raw_json.replace("'", '"')
+            data = json.loads(fixed)
+        except Exception as e:
+            return jsonify({"error": f"Invalid JSON: {str(e)}", "raw": raw_json}), 400
+
+    # {"tasks": [...]} 形式対応
+    if isinstance(data, dict) and "tasks" in data:
+        data = data["tasks"]
 
     conn = get_db()
     c = conn.cursor()
@@ -1840,11 +1828,13 @@ def sync_apply():
         )
         archived += 1
 
-    conn.commit()
-    if created or updated or archived:
-        update_snapshot(c)
-    conn.commit()
-    conn.close()
+    try:
+        conn.commit()
+        if created or updated or archived:
+            update_snapshot(c)
+            conn.commit()
+    finally:
+        conn.close()
 
     return jsonify(
         {
@@ -1857,16 +1847,20 @@ def sync_apply():
         }
     )
 
+
 def update_snapshot(cursor):
     cursor.execute("DELETE FROM sync_snapshot")
 
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO sync_snapshot
         SELECT sync_key, title, deadline, project_id, student_id, priority, status, datetime('now')
         FROM tasks
         WHERE archived=0
-    """)
-    
+    """
+    )
+
+
 @app.route("/deploy", methods=["POST"])
 def deploy():
     import subprocess  # ←これだけ残す
@@ -1907,34 +1901,40 @@ def deploy():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 # ChatGPT向けタスクエクスポート
 @app.route("/export_tasks_for_chatgpt")
 def export_tasks_for_chatgpt():
     conn = get_db()
     c = conn.cursor()
 
-    rows = c.execute("""
+    rows = c.execute(
+        """
         SELECT t.title, t.deadline, t.priority, t.status,
                p.name as project_name, t.student_id
         FROM tasks t
         LEFT JOIN projects p ON t.project_id = p.id
         WHERE t.archived = 0
-    """).fetchall()
+    """
+    ).fetchall()
 
     conn.close()
 
     tasks = []
     for r in rows:
-        tasks.append({
-            "title": r["title"],
-            "deadline": r["deadline"],
-            "priority": r["priority"],
-            "status": r["status"],
-            "project": r["project_name"],
-            "student_id": r["student_id"]
-        })
+        tasks.append(
+            {
+                "title": r["title"],
+                "deadline": r["deadline"],
+                "priority": r["priority"],
+                "status": r["status"],
+                "project": r["project_name"],
+                "student_id": r["student_id"],
+            }
+        )
 
     return jsonify({"tasks": tasks})
+
 
 # 人間向けタスクエクスポート（メモ形式）
 @app.route("/export_tasks_as_memo")
@@ -1942,14 +1942,16 @@ def export_tasks_as_memo():
     conn = get_db()
     c = conn.cursor()
 
-    rows = c.execute("""
+    rows = c.execute(
+        """
         SELECT t.title, t.deadline, t.priority,
                p.name as project_name
         FROM tasks t
         LEFT JOIN projects p ON t.project_id = p.id
         WHERE t.status != 'done' AND t.archived = 0
         ORDER BY t.deadline IS NULL, t.deadline
-    """).fetchall()
+    """
+    ).fetchall()
 
     conn.close()
 
@@ -1969,10 +1971,9 @@ def export_tasks_as_memo():
 
         lines.append(line)
 
-    return jsonify({
-        "memo": "\n".join(lines)
-    })
-    
+    return jsonify({"memo": "\n".join(lines)})
+
+
 @app.route("/export_delta_for_gpt")
 def export_delta_for_gpt():
     conn = get_db()
@@ -1983,7 +1984,31 @@ def export_delta_for_gpt():
     conn.close()
 
     return jsonify({"delta": delta})
-    
+
+
+@app.route("/edit_task_title", methods=["POST"])
+def edit_task_title():
+    task_id = request.form["task_id"]
+    new_title = request.form["title"]
+
+    if not new_title:
+        return redirect("/")
+
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        c.execute(
+            "UPDATE tasks SET title=? WHERE id=?",
+            (new_title, task_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return redirect("/")
+
+
 if __name__ == "__main__":
     init_db()
     app.run(debug=True, port=5001)

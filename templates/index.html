@@ -2,17 +2,237 @@
 <html>
     <head>
         <title>Lab OS</title>
+        <script>
+        function normalizeName(str) {
+            return (str || "")
+                .replace(/[ 　]/g, "")           // 半角・全角スペース削除
+                .replace(/さん|くん|君|氏/g, "") // 敬称削除
+                .toLowerCase();
+        }
+        function linkStudentNames(container) {
+            const students = {{ students | default([]) | tojson | safe }};
+            if (!students || students.length === 0 || !container) return;
+
+            const nameMap = new Map();
+            students.forEach((s) => {
+                if (!s || !s.name || !s.student_id) return;
+                const key = normalizeName(s.name);
+                if (!nameMap.has(key)) {
+                    nameMap.set(key, { rawName: s.name, student_id: s.student_id });
+                }
+            });
+
+            const escapedNames = Array.from(nameMap.values())
+                .map((s) => s.rawName)
+                .filter(Boolean)
+                .sort((a, b) => b.length - a.length)
+                .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+            if (escapedNames.length === 0) return;
+
+            const combinedPattern = new RegExp(
+                `(${escapedNames.join("|")})(?:さん|くん|君|氏)?`,
+                "g"
+            );
+
+            function walk(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.nodeValue;
+                    if (!text || !combinedPattern.test(text)) {
+                        combinedPattern.lastIndex = 0;
+                        return;
+                    }
+                    combinedPattern.lastIndex = 0;
+
+                    const parent = node.parentNode;
+                    if (!parent) return;
+
+                    let lastIndex = 0;
+                    const fragments = [];
+                    let match;
+
+                    while ((match = combinedPattern.exec(text)) !== null) {
+                        const matchedText = match[0];
+                        const normalizedMatched = normalizeName(matchedText);
+                        const matchedStudent = nameMap.get(normalizedMatched);
+                        if (!matchedStudent) continue;
+
+                        if (match.index > lastIndex) {
+                            fragments.push(document.createTextNode(text.slice(lastIndex, match.index)));
+                        }
+
+                        const a = document.createElement("a");
+                        a.href = `/student_log?name=${encodeURIComponent(matchedStudent.rawName)}`;
+                        a.style.color = "inherit";
+                        a.style.textDecoration = "underline";
+                        a.textContent = matchedText;
+                        a.className = "student-link";
+                        a.dataset.studentName = matchedStudent.rawName;
+                        a.dataset.studentId = String(matchedStudent.student_id);
+                        fragments.push(a);
+
+                        lastIndex = match.index + matchedText.length;
+                    }
+
+                    if (fragments.length === 0) {
+                        combinedPattern.lastIndex = 0;
+                        return;
+                    }
+
+                    if (lastIndex < text.length) {
+                        fragments.push(document.createTextNode(text.slice(lastIndex)));
+                    }
+
+                    fragments.forEach((fragment) => parent.insertBefore(fragment, node));
+                    parent.removeChild(node);
+                    combinedPattern.lastIndex = 0;
+                    return;
+                }
+
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    const tagName = node.tagName ? node.tagName.toLowerCase() : "";
+                    if (["a", "button", "textarea", "input", "select", "option", "script", "style"].includes(tagName)) {
+                        return;
+                    }
+                    Array.from(node.childNodes).forEach(walk);
+                }
+            }
+
+            walk(container);
+        }
+
+        let studentSummaryTooltip;
+        let studentSummaryAbortController = null;
+        const studentSummaryCache = new Map();
+
+        function ensureStudentSummaryTooltip() {
+            if (studentSummaryTooltip) return studentSummaryTooltip;
+
+            studentSummaryTooltip = document.createElement("div");
+            studentSummaryTooltip.id = "studentSummaryTooltip";
+            studentSummaryTooltip.style.position = "fixed";
+            studentSummaryTooltip.style.display = "none";
+            studentSummaryTooltip.style.maxWidth = "320px";
+            studentSummaryTooltip.style.padding = "8px 10px";
+            studentSummaryTooltip.style.background = "#fffbe6";
+            studentSummaryTooltip.style.border = "1px solid #cc9a00";
+            studentSummaryTooltip.style.borderRadius = "8px";
+            studentSummaryTooltip.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
+            studentSummaryTooltip.style.fontSize = "0.9em";
+            studentSummaryTooltip.style.lineHeight = "1.4";
+            studentSummaryTooltip.style.zIndex = "9999";
+            studentSummaryTooltip.style.pointerEvents = "none";
+            document.body.appendChild(studentSummaryTooltip);
+            return studentSummaryTooltip;
+        }
+
+        function positionStudentSummaryTooltip(event) {
+            const tooltip = ensureStudentSummaryTooltip();
+            tooltip.style.left = `${event.clientX + 14}px`;
+            tooltip.style.top = `${event.clientY + 14}px`;
+        }
+
+        function renderStudentSummary(summary) {
+            const nextTasks = (summary.next_tasks || [])
+                .map((task) => {
+                    const deadline = task.deadline ? ` [${task.deadline}]` : "";
+                    return `・${task.title}${deadline}`;
+                })
+                .join("<br>");
+
+            return [
+                `<strong>${summary.name}</strong>`,
+                `未完了: ${summary.todo_count}件 / 完了: ${summary.done_count}件 / 期限切れ: ${summary.overdue_count}件`,
+                nextTasks ? `直近タスク:<br>${nextTasks}` : "直近タスク: なし",
+            ].join("<br>");
+        }
+
+        async function showStudentSummary(link, event) {
+            const tooltip = ensureStudentSummaryTooltip();
+            const name = link.dataset.studentName;
+            if (!name) return;
+
+            positionStudentSummaryTooltip(event);
+            tooltip.style.display = "block";
+            tooltip.innerHTML = "読込中...";
+
+            if (studentSummaryCache.has(name)) {
+                tooltip.innerHTML = renderStudentSummary(studentSummaryCache.get(name));
+                return;
+            }
+
+            if (studentSummaryAbortController) {
+                studentSummaryAbortController.abort();
+            }
+            studentSummaryAbortController = new AbortController();
+
+            try {
+                const res = await fetch(`/student_summary?name=${encodeURIComponent(name)}`, {
+                    signal: studentSummaryAbortController.signal,
+                });
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                studentSummaryCache.set(name, data);
+                tooltip.innerHTML = renderStudentSummary(data);
+            } catch (error) {
+                if (error.name === "AbortError") return;
+                tooltip.innerHTML = "サマリ取得失敗";
+            }
+        }
+
+        function hideStudentSummary() {
+            const tooltip = ensureStudentSummaryTooltip();
+            tooltip.style.display = "none";
+        }
+
+        function bindStudentSummaryHover(root = document) {
+            root.querySelectorAll("a.student-link").forEach((link) => {
+                if (link.dataset.hoverBound === "1") return;
+                link.dataset.hoverBound = "1";
+
+                link.addEventListener("mouseenter", (event) => {
+                    showStudentSummary(link, event);
+                });
+                link.addEventListener("mousemove", (event) => {
+                    positionStudentSummaryTooltip(event);
+                });
+                link.addEventListener("mouseleave", () => {
+                    hideStudentSummary();
+                });
+                link.addEventListener("blur", () => {
+                    hideStudentSummary();
+                });
+            });
+        }
+
+        window.addEventListener("load", () => {
+            document.querySelectorAll("[data-task-id]").forEach(el => {
+                linkStudentNames(el);
+            });
+            bindStudentSummaryHover(document);
+        });
+        </script>
     </head>
     <body>
         <h1>Lab OS Dashboard</h1>
+        {% macro edit_form(task_id) %}
+            <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
+                <input type="hidden" name="task_id" value="{{ task_id }}">
+                <input type="text" name="title" placeholder="編集" style="width:120px;">
+                <button type="submit">変更</button>
+            </form>
+        {% endmacro %}
         {% if is_production %}
         <form id="deployForm" onsubmit="runDeploy(event)">
             <button type="submit">最新コードに更新</button>
             <span id="deployResult" style="margin-left:10px;"></span>
         </form>
         {% endif %}
-        <button type="button" onclick="exportMemo()">ChatGPTメモ生成</button>
-        <button onclick="exportDelta()">差分メモ生成</button>
+        <button type="button" onclick="exportMemo()" title="現在の全タスクをメモとして出力（再生成・整理用）">📄 全タスクをメモ化</button>
+        <button type="button" onclick="exportDelta()" title="前回からの変更分のみをメモとして出力（更新反映用）">🔄 変更分だけメモ化</button>
+        <button type="button" onclick="exportDeltaJson()" title="変更分をJSONで出力（構造確認・機械処理用）">🧩 変更分をJSON化</button>
         <!-- タスクインポート / 同期 -->
         <h2>タスク同期</h2>
         <form id="syncForm">
@@ -54,15 +274,15 @@
         });
         function fieldLabel(field) {
             const labels = {
-                title: "タイトル",
-                deadline: "締切",
-                project_id: "プロジェクト",
-                student_id: "学生ID",
-                priority: "優先度",
-                status: "状態",
-                archived: "アーカイブ",
-                source_type: "同期元",
-                source_updated_at: "元データ更新時刻"
+                title: "タイトル (title)",
+                deadline: "締切 (deadline)",
+                project_id: "プロジェクトID (project_id)",
+                student_id: "学生ID (student_id)",
+                priority: "優先度 (priority)",
+                status: "状態 (status)",
+                archived: "アーカイブ (archived)",
+                source_type: "同期元 (source_type)",
+                source_updated_at: "元データ更新時刻 (source_updated_at)"
             };
             return labels[field] || field;
         }
@@ -204,6 +424,8 @@
 
                 if (current && fresh) {
                     current.replaceWith(fresh);
+                    linkStudentNames(fresh);
+                    bindStudentSummaryHover(fresh);
                     markTaskUpdated(taskId);
                 }
             });
@@ -313,36 +535,118 @@
             const res = await fetch("/export_tasks_as_memo");
             const data = await res.json();
 
-            document.getElementById("memoInput").value = data.memo;
+            const prompt = buildFullMemoPrompt();
+
+            document.getElementById("memoInput").value =
+                prompt + "\n\n" + data.memo;
         }
         async function exportDelta() {
             const res = await fetch("/export_delta_for_gpt");
             const data = await res.json();
 
+            const prompt = buildDeltaPrompt();
+            const body = formatDeltaForGPT(data.delta);
+
             document.getElementById("memoInput").value =
-                formatDeltaForGPT(data.delta);
+                prompt + "\n\n" + body;
+        }
+        async function exportDeltaJson() {
+            const res = await fetch("/export_delta_for_gpt");
+            const data = await res.json();
+
+            const prompt = buildDeltaJsonPrompt();
+            const body = JSON.stringify(data.delta, null, 2);
+
+            document.getElementById("memoInput").value =
+                prompt + "\n\n" + body;
+        }
+        function buildFullMemoPrompt() {
+            return [
+                "以下は現在のタスク一覧です。【ChatGPTにはこのまま投げないように!】",
+                "",
+                "【目的】",
+                "- タスクを分かりやすく整理する",
+                "- 重複や曖昧な表現を必要に応じて整理する",
+            ].join("\n");
+        }
+        function buildDeltaPrompt() {
+            return [
+                "あなたはタスク管理アシスタントです。",
+                "以下の差分情報をもとに、既存のタスク一覧を更新してください。",
+                "",
+                "【ルール】",
+                "- [追加] は新規タスクとして追加する",
+                "- [更新] は既存タスクを更新する（タイトルが一致するもの）",
+                "- [削除] は該当タスクを削除またはアーカイブ扱いにする",
+                "",
+                "出力は、更新後のタスク一覧を簡潔に整理した形式で提示してください。"
+            ].join("\n");
+        }
+        function buildDeltaJsonPrompt() {
+            return [
+                "あなたはタスク管理アシスタントです。",
+                "以下は変更差分のJSONです。",
+                "sync_key を同一タスク識別子として扱い、既存タスク一覧を更新してください。",
+                "",
+                "【ルール】",
+                "- added は新規追加",
+                "- updated は既存タスク更新",
+                "- deleted は削除またはアーカイブ扱い",
+                "- updated.changes の field / old / new を優先して反映する",
+                "- タイトルではなく sync_key を優先して照合する",
+                "",
+                "出力は、更新後のタスク一覧を簡潔に整理した形式で提示してください。"
+            ].join("\n");
         }
         function formatDeltaForGPT(delta) {
             let lines = [];
 
-            if (delta.added.length) {
+            const added = delta.added || delta.create || [];
+            const updated = delta.updated || delta.update || [];
+            const deleted = delta.deleted || delta.archive || [];
+
+            if (added.length) {
                 lines.push("[追加]");
-                delta.added.forEach(t => {
-                    lines.push(`- ${t.title}`);
+                added.forEach(t => {
+                    const title = t.title || "（無題）";
+                    lines.push(`- ${title} [sync_key: ${t.sync_key || "unknown"}]`);
+                    lines.push(`    ${fieldLabel("deadline")}: ${formatValue(t.deadline)}`);
+                    lines.push(`    ${fieldLabel("priority")}: ${formatValue(t.priority)}`);
+                    lines.push(`    ${fieldLabel("status")}: ${formatValue(t.status)}`);
+                    lines.push(`    ${fieldLabel("project_id")}: ${formatValue(t.project_id)}`);
+                    lines.push(`    ${fieldLabel("student_id")}: ${formatValue(t.student_id)}`);
                 });
             }
 
-            if (delta.updated.length) {
+            if (updated.length) {
                 lines.push("\n[更新]");
-                delta.updated.forEach(t => {
-                    lines.push(`- ${t.title}`);
+                updated.forEach(t => {
+                    const title = t.title || "（無題）";
+                    lines.push(`- ${title} [sync_key: ${t.sync_key || "unknown"}]`);
+
+                    if (t.changes && t.changes.length) {
+                        t.changes.forEach(change => {
+                            lines.push(
+                                `    ${fieldLabel(change.field)}: ${formatValue(change.old)} → ${formatValue(change.new)}`
+                            );
+                        });
+                    }
                 });
             }
 
-            if (delta.deleted.length) {
+            if (deleted.length) {
                 lines.push("\n[削除]");
-                delta.deleted.forEach(k => {
-                    lines.push(`- ${k}`);
+                deleted.forEach(t => {
+                    const title = (typeof t === "string") ? t : (t.title || "（無題）");
+                    const syncKey = (typeof t === "string") ? t : (t.sync_key || "unknown");
+                    lines.push(`- ${title} [sync_key: ${syncKey}]`);
+                    if (typeof t !== "string") {
+                        lines.push(`    ${fieldLabel("deadline")}: ${formatValue(t.deadline)}`);
+                        lines.push(`    ${fieldLabel("priority")}: ${formatValue(t.priority)}`);
+                        lines.push(`    ${fieldLabel("status")}: ${formatValue(t.status)}`);
+                        lines.push(`    ${fieldLabel("project_id")}: ${formatValue(t.project_id)}`);
+                        lines.push(`    ${fieldLabel("student_id")}: ${formatValue(t.student_id)}`);
+                    }
                 });
             }
 
@@ -376,9 +680,10 @@
         <h2>⚠ 期限切れ</h2>
         <ul>
             {% for t in overdue %}
-                <li data-task-id="{{ t["task_id"] }}" style="color:red">
+                <li data-task-id="{{ t["task_id"] }}" style="color:red" class="task-title-scope">
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
+                    {{ edit_form(t["task_id"]) }}
                     （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
@@ -409,9 +714,10 @@
         <h2>今日のタスク</h2>
         <ul>
             {% for t in today %}
-                <li data-task-id="{{ t["task_id"] }}" style="color:orange">
+                <li data-task-id="{{ t["task_id"] }}" style="color:orange" class="task-title-scope">
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
+                    {{ edit_form(t["task_id"]) }}
                     （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     [{{ t["deadline_display"] }}]
@@ -429,9 +735,10 @@
         <h2>今後の〆切</h2>
         <ul>
             {% for t in tasks_todo %}
-                <li data-task-id="{{ t["task_id"] }}">
+                <li data-task-id="{{ t["task_id"] }}" class="task-title-scope">
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
+                    {{ edit_form(t["task_id"]) }}
                     （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
@@ -447,9 +754,10 @@
         <h2>いつでも</h2>
         <ul>
             {% for t in tasks_todo_anytime %}
-                <li data-task-id="{{ t["task_id"] }}">
+                <li data-task-id="{{ t["task_id"] }}" class="task-title-scope">
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
+                    {{ edit_form(t["task_id"]) }}
                     （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
@@ -478,7 +786,9 @@
         <ul>
             {% for t in tasks_done %}
                 <li>
-                    <s>{{ t["title"] }}</s>（{{ t["name"] }}）
+                    <s>{{ t["title"] }}</s>
+                    {{ edit_form(t["id"]) }}
+                    （{{ t["name"] }}）
                 </li>
             {% endfor %}
         </ul>
