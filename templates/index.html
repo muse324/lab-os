@@ -710,7 +710,13 @@
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
                     {{ edit_form(t["task_id"]) }}
-                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    （
+                    {% if t["project_name"] == "Inbox" %}
+                        <a href="/inbox">{{ t["project_name"] }}</a>
+                    {% else %}
+                        <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
+                    {% endif %}
+                    ）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
                     {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
@@ -744,7 +750,13 @@
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
                     {{ edit_form(t["task_id"]) }}
-                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    （
+                    {% if t["project_name"] == "Inbox" %}
+                        <a href="/inbox">{{ t["project_name"] }}</a>
+                    {% else %}
+                        <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
+                    {% endif %}
+                    ）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     [{{ t["deadline_display"] }}]
                     <form action="/done/{{ t["task_id"] }}"
@@ -765,7 +777,13 @@
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
                     {{ edit_form(t["task_id"]) }}
-                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    （
+                    {% if t["project_name"] == "Inbox" %}
+                        <a href="/inbox">{{ t["project_name"] }}</a>
+                    {% else %}
+                        <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
+                    {% endif %}
+                    ）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
                     <form action="/done/{{ t["task_id"] }}"
@@ -784,7 +802,13 @@
                     {% if t["priority"] == "high" %}🔥{% endif %}
                     {{ t["title"] }}
                     {{ edit_form(t["task_id"]) }}
-                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    （
+                    {% if t["project_name"] == "Inbox" %}
+                        <a href="/inbox">{{ t["project_name"] }}</a>
+                    {% else %}
+                        <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
+                    {% endif %}
+                    ）
                     <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
                     {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
                     <form action="/done/{{ t["task_id"] }}"
