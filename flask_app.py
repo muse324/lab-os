@@ -1809,16 +1809,16 @@ def sync_apply():
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
+    import subprocess  # ←これだけ残す
+
     # 本番環境以外では実行禁止
-    if not os.getenv("IS_PRODUCTION"):
+    if os.getenv("IS_PRODUCTION") != "1":
         return (
             jsonify(
                 {"status": "error", "message": "deployは本番環境のみ許可されています"}
             ),
             403,
         )
-    import subprocess
-    import os
 
     try:
         result = subprocess.run(
@@ -1828,14 +1828,24 @@ def deploy():
         )
 
         if result.returncode == 0:
+            print("DEPLOY STDOUT:", result.stdout)
             return jsonify(
                 {"status": "success", "message": "deployed!", "log": result.stdout}
             )
+        else:
+            print("DEPLOY STDERR:", result.stderr)
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": result.stderr or "Unknown error",
+                    }
+                ),
+                500,
+            )
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-    print("DEPLOY STDOUT:", result.stdout)
-    print("DEPLOY STDERR:", result.stderr)
 
 
 if __name__ == "__main__":
