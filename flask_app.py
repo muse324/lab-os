@@ -437,7 +437,7 @@ def home():
         projects=projects,
         tasks_done=tasks_done,
         tasks_todo_anytime=tasks_todo_anytime,
-        is_production=os.getenv("IS_PRODUCTION") == "1"
+        is_production=os.getenv("IS_PRODUCTION") == "1",
     )
 
 
@@ -1831,9 +1831,11 @@ def deploy():
             return jsonify(
                 {"status": "success", "message": "deployed!", "log": result.stdout}
             )
-
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+    print("DEPLOY STDOUT:", result.stdout)
+    print("DEPLOY STDERR:", result.stderr)
 
 
 if __name__ == "__main__":
