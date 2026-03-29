@@ -287,9 +287,57 @@ def init_db():
             "INSERT INTO projects (name, type, status) VALUES ('研究室運営OS', 'research', 'active')"
         )
 
+    # スナップショットテーブルの作成
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_snapshot (
+            sync_key TEXT PRIMARY KEY,
+            title TEXT,
+            deadline TEXT,
+            project_id INTEGER,
+            student_id INTEGER,
+            priority TEXT,
+            status TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
 
+def build_delta(cursor):
+    current = cursor.execute("""
+        SELECT sync_key, title, deadline, project_id, student_id, priority, status
+        FROM tasks
+        WHERE archived=0
+    """).fetchall()
+
+    snapshot = {
+        row["sync_key"]: row
+        for row in cursor.execute("SELECT * FROM sync_snapshot").fetchall()
+    }
+
+    delta = {
+        "added": [],
+        "updated": [],
+        "deleted": []
+    }
+
+    for row in current:
+        sk = row["sync_key"]
+        if sk not in snapshot:
+            delta["added"].append(dict(row))
+        else:
+            old = snapshot[sk]
+            if any(row[f] != old[f] for f in ["title","deadline","project_id","priority","status"]):
+                delta["updated"].append(dict(row))
+
+    for sk in snapshot:
+        if sk not in {r["sync_key"] for r in current}:
+            delta["deleted"].append(sk)
+
+    return delta
 
 def format_date_jp(date_str):
     if not date_str:
@@ -1793,6 +1841,9 @@ def sync_apply():
         archived += 1
 
     conn.commit()
+    if created or updated or archived:
+        update_snapshot(c)
+    conn.commit()
     conn.close()
 
     return jsonify(
@@ -1806,7 +1857,16 @@ def sync_apply():
         }
     )
 
+def update_snapshot(cursor):
+    cursor.execute("DELETE FROM sync_snapshot")
 
+    cursor.execute("""
+        INSERT INTO sync_snapshot
+        SELECT sync_key, title, deadline, project_id, student_id, priority, status, datetime('now')
+        FROM tasks
+        WHERE archived=0
+    """)
+    
 @app.route("/deploy", methods=["POST"])
 def deploy():
     import subprocess  # ←これだけ残す
@@ -1847,7 +1907,83 @@ def deploy():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# ChatGPT向けタスクエクスポート
+@app.route("/export_tasks_for_chatgpt")
+def export_tasks_for_chatgpt():
+    conn = get_db()
+    c = conn.cursor()
 
+    rows = c.execute("""
+        SELECT t.title, t.deadline, t.priority, t.status,
+               p.name as project_name, t.student_id
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        WHERE t.archived = 0
+    """).fetchall()
+
+    conn.close()
+
+    tasks = []
+    for r in rows:
+        tasks.append({
+            "title": r["title"],
+            "deadline": r["deadline"],
+            "priority": r["priority"],
+            "status": r["status"],
+            "project": r["project_name"],
+            "student_id": r["student_id"]
+        })
+
+    return jsonify({"tasks": tasks})
+
+# 人間向けタスクエクスポート（メモ形式）
+@app.route("/export_tasks_as_memo")
+def export_tasks_as_memo():
+    conn = get_db()
+    c = conn.cursor()
+
+    rows = c.execute("""
+        SELECT t.title, t.deadline, t.priority,
+               p.name as project_name
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        WHERE t.status != 'done' AND t.archived = 0
+        ORDER BY t.deadline IS NULL, t.deadline
+    """).fetchall()
+
+    conn.close()
+
+    lines = []
+
+    for r in rows:
+        line = r["title"]
+
+        if r["deadline"]:
+            line += f"（{r['deadline']}まで）"
+
+        if r["priority"] == "high":
+            line += "（重要）"
+
+        if r["project_name"]:
+            line += f" @{r['project_name']}"
+
+        lines.append(line)
+
+    return jsonify({
+        "memo": "\n".join(lines)
+    })
+    
+@app.route("/export_delta_for_gpt")
+def export_delta_for_gpt():
+    conn = get_db()
+    c = conn.cursor()
+
+    delta = build_delta(c)
+
+    conn.close()
+
+    return jsonify({"delta": delta})
+    
 if __name__ == "__main__":
     init_db()
     app.run(debug=True, port=5001)

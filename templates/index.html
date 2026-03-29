@@ -11,7 +11,8 @@
             <span id="deployResult" style="margin-left:10px;"></span>
         </form>
         {% endif %}
-
+        <button type="button" onclick="exportMemo()">ChatGPTメモ生成</button>
+        <button onclick="exportDelta()">差分メモ生成</button>
         <!-- タスクインポート / 同期 -->
         <h2>タスク同期</h2>
         <form id="syncForm">
@@ -307,6 +308,45 @@
             } finally {
                 button.disabled = false;
             }
+        }
+        async function exportMemo() {
+            const res = await fetch("/export_tasks_as_memo");
+            const data = await res.json();
+
+            document.getElementById("memoInput").value = data.memo;
+        }
+        async function exportDelta() {
+            const res = await fetch("/export_delta_for_gpt");
+            const data = await res.json();
+
+            document.getElementById("memoInput").value =
+                formatDeltaForGPT(data.delta);
+        }
+        function formatDeltaForGPT(delta) {
+            let lines = [];
+
+            if (delta.added.length) {
+                lines.push("[追加]");
+                delta.added.forEach(t => {
+                    lines.push(`- ${t.title}`);
+                });
+            }
+
+            if (delta.updated.length) {
+                lines.push("\n[更新]");
+                delta.updated.forEach(t => {
+                    lines.push(`- ${t.title}`);
+                });
+            }
+
+            if (delta.deleted.length) {
+                lines.push("\n[削除]");
+                delta.deleted.forEach(k => {
+                    lines.push(`- ${k}`);
+                });
+            }
+
+            return lines.join("\n");
         }
         </script>
         <!-- クイック入力 -->
