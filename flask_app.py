@@ -494,6 +494,14 @@ def classify_tasks(rows, today_str):
         for t in rows
         if t["archived"] == 0 and t["status"] != "done" and not t["deadline"]
     ]
+    anytime_tasks = sorted(
+        anytime_tasks,
+        key=lambda t: (
+            t.get("source_updated_at") or "",
+            t.get("task_id") or 0,
+        ),
+        reverse=True,
+    )
     done_tasks = [t for t in rows if t["archived"] == 0 and t["status"] == "done"]
     archived_tasks = [t for t in rows if t["archived"] == 1]
 
@@ -2028,6 +2036,16 @@ def sync_apply():
         if created or updated or archived:
             update_snapshot(c)
             conn.commit()
+        # --- Fetch recent sync_history records ---
+        history_rows = c.execute(
+            """
+            SELECT task_id, sync_key, field_name, old_value, new_value, changed_at, source_type
+            FROM sync_history
+            ORDER BY changed_at DESC
+            LIMIT 50
+            """
+        ).fetchall()
+        sync_history = [dict(row) for row in history_rows]
     finally:
         conn.close()
 
@@ -2039,6 +2057,7 @@ def sync_apply():
             "archived": archived,
             "unchanged": len(diff["unchanged"]),
             "errors": diff["errors"],
+            "sync_history": sync_history,
         }
     )
 

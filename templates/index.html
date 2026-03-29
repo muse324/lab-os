@@ -233,6 +233,15 @@
         <button type="button" onclick="exportMemo()" title="現在の全タスクをメモとして出力（再生成・整理用）">📄 全タスクをメモ化</button>
         <button type="button" onclick="exportDelta()" title="前回からの変更分のみをメモとして出力（更新反映用）">🔄 変更分だけメモ化</button>
         <button type="button" onclick="exportDeltaJson()" title="変更分をJSONで出力（構造確認・機械処理用）">🧩 変更分をJSON化</button>
+        <select onchange="window.syncHistoryFilterField=this.value||null">
+            <option value="">全フィールド</option>
+            <option value="title">title</option>
+            <option value="deadline">deadline</option>
+            <option value="project_id">project_id</option>
+            <option value="student_id">student_id</option>
+            <option value="priority">priority</option>
+            <option value="status">status</option>
+        </select>
         <!-- タスクインポート / 同期 -->
         <h2>タスク同期</h2>
         <form id="syncForm">
@@ -398,6 +407,25 @@
 
                         lines.push(`     削除方式: ${item.is_soft_delete ? "soft delete（復活可能）" : "hard delete"}`);
                         lines.push(`     復活可否: ${item.revivable ? "はい" : "いいえ"}`);
+                    });
+                }
+            }
+            if (mode === "apply" && data.sync_history) {
+                const updatedIds = new Set(data.updated_task_ids || []);
+
+                const filtered = data.sync_history.filter(h =>
+                    updatedIds.has(h.task_id)
+                );
+
+                if (filtered.length > 0) {
+                    lines.push("");
+                    lines.push("変更ログ（今回反映分）:");
+
+                    filtered.forEach((h, i) => {
+                        lines.push(`  ${i + 1}. task_id=${h.task_id}`);
+                        lines.push(`     ${fieldLabel(h.field_name)}: ${formatValue(h.old_value)} → ${formatValue(h.new_value)}`);
+                        lines.push(`     同期元: ${h.source_type}`);
+                        lines.push(`     時刻: ${h.changed_at}`);
                     });
                 }
             }
