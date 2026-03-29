@@ -11,91 +11,122 @@ function normalizeName(str) {
 }
 
 function linkStudentNames(container) {
-    const students = {{ students | default([]) | tojson | safe }};
-    if (!students || students.length === 0 || !container) return;
+    let students;
+    try {
+        students = {{ students | default([]) | tojson | safe }};
+    } catch (e) {
+        console.error("students JSON parse error:", e);
+        return;
+    }
+
+    if (!Array.isArray(students) || students.length === 0 || !container) return;
 
     const nameMap = new Map();
+
     students.forEach((s) => {
-        if (!s || !s.name || !s.student_id) return;
-        const key = normalizeName(s.name);
-        if (!nameMap.has(key)) {
-            nameMap.set(key, { rawName: s.name, student_id: s.student_id });
+        try {
+            if (!s || typeof s.name !== "string") return;
+            if (!s.student_id || isNaN(Number(s.student_id))) return;
+
+            const key = normalizeName(s.name);
+            if (!key) return;
+
+            if (!nameMap.has(key)) {
+                nameMap.set(key, {
+                    rawName: s.name,
+                    student_id: Number(s.student_id),
+                });
+            }
+        } catch (e) {
+            console.warn("invalid student row skipped:", s);
         }
     });
 
-    const escapedNames = Array.from(nameMap.values())
-        .map((s) => s.rawName)
-        .filter(Boolean)
-        .sort((a, b) => b.length - a.length)
-        .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (nameMap.size === 0) return;
 
-    if (escapedNames.length === 0) return;
+    let combinedPattern;
+    try {
+        const escapedNames = Array.from(nameMap.values())
+            .map((s) => s.rawName)
+            .filter((name) => typeof name === "string" && name.length > 0)
+            .sort((a, b) => b.length - a.length)
+            .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
-    const combinedPattern = new RegExp(
-        `(${escapedNames.join("|")})(?:さん|くん|君|氏)?`,
-        "g"
-    );
+        if (escapedNames.length === 0) return;
+
+        combinedPattern = new RegExp(
+            `(${escapedNames.join("|")})(?:さん|くん|君|氏)?`,
+            "g"
+        );
+    } catch (e) {
+        console.error("RegExp build failed:", e);
+        return;
+    }
 
     function walk(node) {
-        if (node.nodeType === Node.TEXT_NODE) {
-            const text = node.nodeValue;
-            if (!text || !combinedPattern.test(text)) {
+        try {
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = node.nodeValue;
+                if (!text || !combinedPattern.test(text)) {
+                    combinedPattern.lastIndex = 0;
+                    return;
+                }
                 combinedPattern.lastIndex = 0;
-                return;
-            }
-            combinedPattern.lastIndex = 0;
 
-            const parent = node.parentNode;
-            if (!parent) return;
+                const parent = node.parentNode;
+                if (!parent) return;
 
-            let lastIndex = 0;
-            const fragments = [];
-            let match;
+                let lastIndex = 0;
+                const fragments = [];
+                let match;
 
-            while ((match = combinedPattern.exec(text)) !== null) {
-                const matchedText = match[0];
-                const normalizedMatched = normalizeName(matchedText);
-                const matchedStudent = nameMap.get(normalizedMatched);
-                if (!matchedStudent) continue;
+                while ((match = combinedPattern.exec(text)) !== null) {
+                    const matchedText = match[0];
+                    const normalizedMatched = normalizeName(matchedText);
+                    const matchedStudent = nameMap.get(normalizedMatched);
+                    if (!matchedStudent) continue;
 
-                if (match.index > lastIndex) {
-                    fragments.push(document.createTextNode(text.slice(lastIndex, match.index)));
+                    if (match.index > lastIndex) {
+                        fragments.push(document.createTextNode(text.slice(lastIndex, match.index)));
+                    }
+
+                    const a = document.createElement("a");
+                    a.href = `/student_log?name=${encodeURIComponent(matchedStudent.rawName)}`;
+                    a.style.color = "inherit";
+                    a.style.textDecoration = "underline";
+                    a.textContent = matchedText;
+                    a.className = "student-link";
+                    a.dataset.studentName = matchedStudent.rawName;
+                    a.dataset.studentId = String(matchedStudent.student_id);
+                    fragments.push(a);
+
+                    lastIndex = match.index + matchedText.length;
                 }
 
-                const a = document.createElement("a");
-                a.href = `/student_log?name=${encodeURIComponent(matchedStudent.rawName)}`;
-                a.style.color = "inherit";
-                a.style.textDecoration = "underline";
-                a.textContent = matchedText;
-                a.className = "student-link";
-                a.dataset.studentName = matchedStudent.rawName;
-                a.dataset.studentId = String(matchedStudent.student_id);
-                fragments.push(a);
+                if (fragments.length === 0) {
+                    combinedPattern.lastIndex = 0;
+                    return;
+                }
 
-                lastIndex = match.index + matchedText.length;
-            }
+                if (lastIndex < text.length) {
+                    fragments.push(document.createTextNode(text.slice(lastIndex)));
+                }
 
-            if (fragments.length === 0) {
+                fragments.forEach((fragment) => parent.insertBefore(fragment, node));
+                parent.removeChild(node);
                 combinedPattern.lastIndex = 0;
                 return;
             }
 
-            if (lastIndex < text.length) {
-                fragments.push(document.createTextNode(text.slice(lastIndex)));
+            if (node.nodeType === Node.ELEMENT_NODE) {
+                const tagName = node.tagName ? node.tagName.toLowerCase() : "";
+                if (["a", "button", "textarea", "input", "select", "option", "script", "style"].includes(tagName)) {
+                    return;
+                }
+                Array.from(node.childNodes).forEach(walk);
             }
-
-            fragments.forEach((fragment) => parent.insertBefore(fragment, node));
-            parent.removeChild(node);
-            combinedPattern.lastIndex = 0;
-            return;
-        }
-
-        if (node.nodeType === Node.ELEMENT_NODE) {
-            const tagName = node.tagName ? node.tagName.toLowerCase() : "";
-            if (["a", "button", "textarea", "input", "select", "option", "script", "style"].includes(tagName)) {
-                return;
-            }
-            Array.from(node.childNodes).forEach(walk);
+        } catch (e) {
+            console.error("walk error:", e);
         }
     }
 
@@ -218,6 +249,14 @@ window.addEventListener("load", () => {
 </head>
 <body>
 
+{% macro edit_form(task_id) %}
+    <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
+        <input type="hidden" name="task_id" value="{{ task_id }}">
+        <input type="text" name="title" placeholder="編集" style="width:120px;">
+        <button type="submit">変更</button>
+    </form>
+{% endmacro %}
+
 <h1>{{ project["name"] }}</h1>
 
 <h2>タスク追加</h2>
@@ -240,31 +279,135 @@ window.addEventListener("load", () => {
 
 <hr>
 
-<h2>タスク</h2>
-
+<h2>⚠ 期限切れ</h2>
 <ul>
-{% for t in tasks %}
-    <li class="task-title-scope">
-        {% if t["priority"] == "high" %}
-            🔥
+{% for t in overdue_tasks %}
+    <li class="task-title-scope" style="color:red;">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        {{ t["title"] }}
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
+            (元: {{ t["original_deadline_display"] }})
         {% endif %}
+        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <button type="submit">完了</button>
+        </form>
+        <form action="/update_task" method="post" style="display:inline;">
+            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="date" name="deadline">
+            <label>
+                <input type="checkbox" name="priority" value="high">
+                重要
+            </label>
+            <button type="submit">更新</button>
+        </form>
+    </li>
+{% endfor %}
+</ul>
 
+<h2>今日のタスク</h2>
+<ul>
+{% for t in today_tasks %}
+    <li class="task-title-scope" style="color:orange;">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        {{ t["title"] }}
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <button type="submit">完了</button>
+        </form>
+        <form action="/update_task" method="post" style="display:inline;">
+            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="date" name="deadline">
+            <label>
+                <input type="checkbox" name="priority" value="high">
+                重要
+            </label>
+            <button type="submit">更新</button>
+        </form>
+    </li>
+{% endfor %}
+</ul>
+
+<h2>今後の〆切</h2>
+<ul>
+{% for t in future_tasks %}
+    <li class="task-title-scope">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        {{ t["title"] }}
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <button type="submit">完了</button>
+        </form>
+        <form action="/update_task" method="post" style="display:inline;">
+            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="date" name="deadline">
+            <label>
+                <input type="checkbox" name="priority" value="high">
+                重要
+            </label>
+            <button type="submit">更新</button>
+        </form>
+    </li>
+{% endfor %}
+</ul>
+
+<h2>いつでも</h2>
+<ul>
+{% for t in anytime_tasks %}
+    <li class="task-title-scope">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        {{ t["title"] }}
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <button type="submit">完了</button>
+        </form>
+        <form action="/update_task" method="post" style="display:inline;">
+            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="date" name="deadline">
+            <label>
+                <input type="checkbox" name="priority" value="high">
+                重要
+            </label>
+            <button type="submit">更新</button>
+        </form>
+    </li>
+{% endfor %}
+</ul>
+
+<h2>完了済み</h2>
+<ul>
+{% for t in done_tasks %}
+    <li class="task-title-scope">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        <s>{{ t["title"] }}</s>
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+    </li>
+{% endfor %}
+</ul>
+
+<h2>タスク（アーカイブ済み）</h2>
+<ul>
+{% for t in archived_tasks %}
+    <li class="task-title-scope" style="color:#888;">
+        {% if t["priority"] == "high" %}🔥{% endif %}
         {% if t["status"] == "done" %}
             <s>{{ t["title"] }}</s>
         {% else %}
             {{ t["title"] }}
         {% endif %}
-
-        {% if t["deadline"] %}
-            [{{ t["deadline"] }}]
-        {% endif %}
-
-        <form action="/done/{{ t["task_id"] }}"
-                method="post"
-                style="display:inline;
-                        margin-left:4px">
-            <button type="submit">完了</button>
-        </form>
+        {{ edit_form(t["task_id"]) }}
+        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        <small>（{{ t["archive_reason"] }}）</small>
     </li>
 {% endfor %}
 </ul>

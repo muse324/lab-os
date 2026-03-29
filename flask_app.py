@@ -351,7 +351,14 @@ def build_delta(cursor):
     }
 
     delta = {"added": [], "updated": [], "deleted": []}
-    tracked_fields = ["title", "deadline", "project_id", "student_id", "priority", "status"]
+    tracked_fields = [
+        "title",
+        "deadline",
+        "project_id",
+        "student_id",
+        "priority",
+        "status",
+    ]
 
     for sync_key, row in current.items():
         row_dict = dict(row)
@@ -459,6 +466,47 @@ def apply_format(rows):
     return result
 
 
+# --- Shared helper for classifying tasks ---
+def classify_tasks(rows, today_str):
+    overdue_tasks = [
+        t
+        for t in rows
+        if t["archived"] == 0
+        and t["status"] != "done"
+        and t["deadline"]
+        and t["deadline"] < today_str
+    ]
+    today_tasks = [
+        t
+        for t in rows
+        if t["archived"] == 0 and t["status"] != "done" and t["deadline"] == today_str
+    ]
+    future_tasks = [
+        t
+        for t in rows
+        if t["archived"] == 0
+        and t["status"] != "done"
+        and t["deadline"]
+        and t["deadline"] > today_str
+    ]
+    anytime_tasks = [
+        t
+        for t in rows
+        if t["archived"] == 0 and t["status"] != "done" and not t["deadline"]
+    ]
+    done_tasks = [t for t in rows if t["archived"] == 0 and t["status"] == "done"]
+    archived_tasks = [t for t in rows if t["archived"] == 1]
+
+    return {
+        "overdue_tasks": overdue_tasks,
+        "today_tasks": today_tasks,
+        "future_tasks": future_tasks,
+        "anytime_tasks": anytime_tasks,
+        "done_tasks": done_tasks,
+        "archived_tasks": archived_tasks,
+    }
+
+
 # --- Helper functions for fetching tasks/projects ---
 def fetch_home_task_rows(
     cursor, where_clause, params=(), order_by="tasks.deadline IS NULL, tasks.deadline"
@@ -503,20 +551,36 @@ def home():
     conn = get_db()
     c = conn.cursor()
 
-    today = fetch_home_task_rows(c, "tasks.deadline = date('now')")
-    overdue = fetch_home_task_rows(c, "tasks.deadline < date('now')")
-    tasks_todo = fetch_home_task_rows(c, "tasks.deadline > date('now')")
-    tasks_todo_anytime = fetch_home_task_rows(
-        c, "tasks.deadline IS NULL OR tasks.deadline = ''"
-    )
-    tasks_done = fetch_done_task_rows(c)
+    today_str = c.execute("SELECT date('now')").fetchone()[0]
+    all_tasks = c.execute(
+        """
+        SELECT
+            tasks.id AS task_id,
+            tasks.title AS title,
+            tasks.status AS status,
+            tasks.deadline AS deadline,
+            tasks.priority AS priority,
+            tasks.original_deadline AS original_deadline,
+            tasks.archived AS archived,
+            projects.id AS project_id,
+            projects.name AS project_name
+        FROM tasks
+        LEFT JOIN projects ON tasks.project_id = projects.id
+        ORDER BY tasks.deadline IS NULL, tasks.deadline
+        """
+    ).fetchall()
+
+    all_tasks = apply_format(all_tasks)
+
+    classified = classify_tasks(all_tasks, today_str)
+
+    overdue = classified["overdue_tasks"]
+    today = classified["today_tasks"]
+    tasks_todo = classified["future_tasks"]
+    tasks_todo_anytime = classified["anytime_tasks"]
+    tasks_done = classified["done_tasks"]
+
     projects = fetch_all_projects(c)
-
-    today = apply_format(today)
-    overdue = apply_format(overdue)
-    tasks_todo = apply_format(tasks_todo)
-    tasks_todo_anytime = apply_format(tasks_todo_anytime)
-
     conn.close()
 
     return render_template(
@@ -624,7 +688,6 @@ def students_index():
     return render_template("students.html", students=names)
 
 
-
 @app.route("/student_log")
 def student_log():
     student_name = request.args.get("name", "")
@@ -714,7 +777,9 @@ def student_summary():
         return jsonify({"error": "name is required"}), 400
 
     matched_students = [
-        s for s in STUDENTS_DATA if s.get("name") == student_name and s.get("student_id")
+        s
+        for s in STUDENTS_DATA
+        if s.get("name") == student_name and s.get("student_id")
     ]
     if not matched_students:
         return jsonify({"error": "student not found"}), 404
@@ -773,7 +838,8 @@ def student_summary():
             "done_count": done_count,
             "overdue_count": overdue_count,
             "next_tasks": [
-                {"title": row["title"], "deadline": row["deadline"]} for row in next_tasks
+                {"title": row["title"], "deadline": row["deadline"]}
+                for row in next_tasks
             ],
         }
     )
@@ -851,18 +917,44 @@ def project_detail(project_id):
     conn = get_db()
     c = conn.cursor()
 
+    today_str = c.execute("SELECT date('now')").fetchone()[0]
+
     # Project取得
     project = c.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
 
-    # ★ タスク取得（これが抜けていた）
-    tasks = c.execute(
-        """SELECT id AS task_id, title, status, deadline, priority
+    # ★ タスク取得
+    all_tasks = c.execute(
+        """
+        SELECT id AS task_id, title, status, deadline, priority, archived,
+               original_deadline, sync_key, source_type, source_updated_at
         FROM tasks
         WHERE project_id=?
         ORDER BY deadline IS NULL, deadline
         """,
         (project_id,),
     ).fetchall()
+
+    all_tasks = apply_format(all_tasks)
+
+    classified = classify_tasks(all_tasks, today_str)
+    overdue_tasks = classified["overdue_tasks"]
+    today_tasks = classified["today_tasks"]
+    future_tasks = classified["future_tasks"]
+    anytime_tasks = classified["anytime_tasks"]
+    done_tasks = classified["done_tasks"]
+
+    archived_tasks = []
+    for t in classified["archived_tasks"]:
+        d = dict(t)
+        if d.get("source_type") in ["chatgpt_memory", "manual_json"] and d.get(
+            "sync_key"
+        ):
+            d["archive_reason"] = "同期差分でアーカイブ"
+        elif d.get("source_type"):
+            d["archive_reason"] = f"{d['source_type']}由来のアーカイブ"
+        else:
+            d["archive_reason"] = "手動または不明"
+        archived_tasks.append(d)
 
     # ★ 履歴取得（taskごとにまとめる）
     if task_id_filter:
@@ -906,7 +998,13 @@ def project_detail(project_id):
     return render_template(
         "project_detail.html",
         project=project,
-        tasks=tasks,
+        tasks=all_tasks,
+        overdue_tasks=overdue_tasks,
+        today_tasks=today_tasks,
+        future_tasks=future_tasks,
+        anytime_tasks=anytime_tasks,
+        done_tasks=done_tasks,
+        archived_tasks=archived_tasks,
         notes=notes,
         history=history,
         students=STUDENTS_DATA,
@@ -1444,6 +1542,72 @@ def normalize_sync_item(item, cursor):
     }
 
 
+# === Merge and normalization helpers for imported tasks ===
+def merge_normalized_task(existing, incoming):
+    merged = dict(existing)
+
+    for field in [
+        "title",
+        "deadline",
+        "project_id",
+        "project_name",
+        "student_id",
+        "priority",
+        "status",
+        "archived",
+        "source_type",
+        "source_updated_at",
+    ]:
+        new_value = incoming.get(field)
+        old_value = merged.get(field)
+
+        if field == "priority":
+            priority_rank = {"low": 0, "medium": 1, "high": 2}
+            if priority_rank.get(new_value, -1) > priority_rank.get(old_value, -1):
+                merged[field] = new_value
+            continue
+
+        if field == "status":
+            if old_value != "done" and new_value == "done":
+                merged[field] = new_value
+            continue
+
+        if field == "source_updated_at":
+            if new_value and (not old_value or new_value >= old_value):
+                merged[field] = new_value
+            continue
+
+        if new_value not in [None, ""]:
+            merged[field] = new_value
+
+    return merged
+
+
+def normalize_imported_tasks(imported_items, cursor):
+    normalized_by_key = {}
+    errors = []
+
+    for item in imported_items:
+        if not isinstance(item, dict):
+            errors.append({"error": "invalid_item_type", "value": str(item)})
+            continue
+
+        normalized = normalize_sync_item(item, cursor)
+        sync_key = normalized.get("sync_key")
+        if not sync_key:
+            errors.append({"error": "missing_sync_key", "value": str(item)})
+            continue
+
+        if sync_key in normalized_by_key:
+            normalized_by_key[sync_key] = merge_normalized_task(
+                normalized_by_key[sync_key], normalized
+            )
+        else:
+            normalized_by_key[sync_key] = normalized
+
+    return list(normalized_by_key.values()), errors
+
+
 def diff_task(existing, normalized):
     changes = []
     for field in SYNC_FIELDS:
@@ -1531,19 +1695,19 @@ def build_sync_diff(imported_items, cursor):
         "errors": [],
     }
 
+    normalized_items, normalize_errors = normalize_imported_tasks(
+        imported_items, cursor
+    )
+    results["errors"].extend(normalize_errors)
+
     imported_sync_keys = set()
     source_types = set()
 
-    for item in imported_items:
-        # 不正データ防御（文字列などをスキップ）
-        if not isinstance(item, dict):
-            results["errors"].append({"error": "invalid_item_type", "value": str(item)})
-            continue
-
-        normalized = normalize_sync_item(item, cursor)
+    for normalized in normalized_items:
         sync_key = normalized["sync_key"]
         imported_sync_keys.add(sync_key)
-        source_types.add(normalized["source_type"])
+        source_type = normalized.get("source_type") or "manual_json"
+        source_types.add(source_type)
 
         existing = cursor.execute(
             "SELECT * FROM tasks WHERE sync_key=? LIMIT 1",
@@ -1560,7 +1724,7 @@ def build_sync_diff(imported_items, cursor):
                 {
                     "task_id": existing["id"],
                     "sync_key": sync_key,
-                    "source_type": normalized["source_type"],
+                    "source_type": source_type,
                     "normalized": normalized,
                     "changes": changes,
                 }
@@ -1571,17 +1735,58 @@ def build_sync_diff(imported_items, cursor):
             )
 
     for source_type in source_types:
+        if source_type == "chatgpt_memory":
+            continue
+        
         existing_rows = cursor.execute(
-            "SELECT id, sync_key FROM tasks WHERE source_type=? AND sync_key IS NOT NULL AND archived=0",
+            """
+            SELECT id, sync_key
+            FROM tasks
+            WHERE source_type=?
+              AND sync_key IS NOT NULL
+              AND archived=0
+            """,
             (source_type,),
         ).fetchall()
+
         for row in existing_rows:
             if row["sync_key"] not in imported_sync_keys:
+                task_row = cursor.execute(
+                    """
+                    SELECT id, title, sync_key, source_type, archived
+                    FROM tasks
+                    WHERE id=?
+                    LIMIT 1
+                    """,
+                    (row["id"],),
+                ).fetchone()
+
+                snapshot_row = cursor.execute(
+                    """
+                    SELECT sync_key, title, deadline, project_id, student_id, priority, status, updated_at
+                    FROM sync_snapshot
+                    WHERE sync_key=?
+                    LIMIT 1
+                    """,
+                    (row["sync_key"],),
+                ).fetchone()
+
                 results["archive"].append(
                     {
                         "task_id": row["id"],
+                        "title": task_row["title"] if task_row else None,
                         "sync_key": row["sync_key"],
                         "source_type": source_type,
+                        "is_soft_delete": True,
+                        "comparison_basis": "前回同期スナップショット vs 現在インポートJSON",
+                        "snapshot_found": bool(snapshot_row),
+                        "snapshot_title": (
+                            snapshot_row["title"] if snapshot_row else None
+                        ),
+                        "snapshot_updated_at": (
+                            snapshot_row["updated_at"] if snapshot_row else None
+                        ),
+                        "revivable": True,
                     }
                 )
 
@@ -1663,19 +1868,9 @@ def import_tasks():
     conn = get_db()
     c = conn.cursor()
 
-    for t in data:
-        # Defensive: skip non-dict
-        if not isinstance(t, dict):
-            continue
+    normalized_items, _ = normalize_imported_tasks(data, c)
 
-        # Normalize title if missing safety (optional but important)
-        # (no-op for now, but placeholder for further normalization if needed)
-
-        # Unified project resolution
-        project_id = resolve_project_id(c, t.get("project"))
-
-        sync_key = t.get("sync_key") or generate_sync_key(t)
-
+    for t in normalized_items:
         c.execute(
             """
             INSERT INTO tasks (
@@ -1687,12 +1882,12 @@ def import_tasks():
             (
                 t.get("title"),
                 t.get("status", "todo"),
-                project_id,
+                t.get("project_id"),
                 t.get("deadline") or None,
                 t.get("deadline") or None,
                 t.get("student_id"),
                 t.get("priority", "medium"),
-                sync_key,
+                t.get("sync_key"),
                 t.get("source_type", "manual_json"),
                 t.get("source_updated_at"),
                 int(t.get("archived", 0)),

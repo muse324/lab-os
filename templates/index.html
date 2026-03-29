@@ -371,7 +371,33 @@
                     lines.push("");
                     lines.push("アーカイブ予定:");
                     data.details.archive.forEach((item, i) => {
-                        lines.push(`  ${i + 1}. ${item.sync_key}`);
+                        lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
+                        lines.push(`     同期キー: ${item.sync_key}`);
+
+                        if (item.source_type === "chatgpt_memory") {
+                            lines.push(`     理由: 同期差分によりアーカイブ（chatgpt_memoryは参照しない）`);
+                        } else if (item.source_type && item.source_type !== "manual_json") {
+                            lines.push(`     理由: ${item.source_type}に存在しないためアーカイブ`);
+                        } else {
+                            lines.push(`     理由: インポートJSONに存在しないためアーカイブ`);
+                        }
+
+                        lines.push(`     比較元: ${item.comparison_basis || "前回同期 vs 現在"}`);
+
+                        if (item.snapshot_found) {
+                            lines.push(`     前回同期スナップショット: あり`);
+                            if (item.snapshot_title) {
+                                lines.push(`     前回タイトル: ${item.snapshot_title}`);
+                            }
+                            if (item.snapshot_updated_at) {
+                                lines.push(`     前回同期時刻: ${item.snapshot_updated_at}`);
+                            }
+                        } else {
+                            lines.push(`     前回同期スナップショット: なし`);
+                        }
+
+                        lines.push(`     削除方式: ${item.is_soft_delete ? "soft delete（復活可能）" : "hard delete"}`);
+                        lines.push(`     復活可否: ${item.revivable ? "はい" : "いいえ"}`);
                     });
                 }
             }
