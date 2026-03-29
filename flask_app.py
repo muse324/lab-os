@@ -5,11 +5,16 @@ import re
 import requests
 import csv
 from io import StringIO
-from openai import OpenAI
 
+# OpenAIは任意（未インストールでもOK）
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+    
 # OpenAIは任意（APIキーがない環境でも動作させる）
 api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key) if api_key else None
+client = OpenAI(api_key=api_key) if (api_key and OpenAI) else None
 
 app = Flask(__name__)  # ← これが最重要
 
