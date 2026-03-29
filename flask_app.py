@@ -437,7 +437,7 @@ def home():
         projects=projects,
         tasks_done=tasks_done,
         tasks_todo_anytime=tasks_todo_anytime,
-        is_production=bool(os.getenv("IS_PRODUCTION"))
+        is_production=os.getenv("IS_PRODUCTION") == "1"
     )
 
 
@@ -1811,7 +1811,12 @@ def sync_apply():
 def deploy():
     # 本番環境以外では実行禁止
     if not os.getenv("IS_PRODUCTION"):
-        return jsonify({"status": "error", "message": "deployは本番環境のみ許可されています"}), 403
+        return (
+            jsonify(
+                {"status": "error", "message": "deployは本番環境のみ許可されています"}
+            ),
+            403,
+        )
     import subprocess
     import os
 
