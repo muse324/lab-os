@@ -5,10 +5,12 @@
     </head>
     <body>
         <h1>Lab OS Dashboard</h1>
+        {% if is_production %}
         <form id="deployForm" onsubmit="runDeploy(event)">
             <button type="submit">最新コードに更新</button>
             <span id="deployResult" style="margin-left:10px;"></span>
         </form>
+        {% endif %}
 
         <!-- タスクインポート / 同期 -->
         <h2>タスク同期</h2>
@@ -263,7 +265,14 @@
             event.preventDefault();
 
             const resultEl = document.getElementById("deployResult");
+            const button = event.target.querySelector("button");
+
+            // 二重実行防止
+            button.disabled = true;
+
             resultEl.textContent = "実行中...";
+
+            const start = Date.now();
 
             try {
                 const res = await fetch("/deploy", {
@@ -271,17 +280,24 @@
                 });
 
                 const data = await res.json();
+                const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
                 if (data.status === "success") {
-                    resultEl.textContent = "deployed!";
+                    resultEl.textContent =
+                        `deployed! (${elapsed}s)\n${data.log || ""}`;
                     resultEl.style.color = "green";
                 } else {
-                    resultEl.textContent = "エラー: " + data.message;
+                    resultEl.textContent =
+                        `エラー (${elapsed}s): ${data.message}`;
                     resultEl.style.color = "red";
                 }
             } catch (e) {
-                resultEl.textContent = "通信エラー: " + e;
+                const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+                resultEl.textContent =
+                    `通信エラー (${elapsed}s): ${e}`;
                 resultEl.style.color = "red";
+            } finally {
+                button.disabled = false;
             }
         }
         </script>

@@ -437,6 +437,7 @@ def home():
         projects=projects,
         tasks_done=tasks_done,
         tasks_todo_anytime=tasks_todo_anytime,
+        is_production=bool(os.getenv("IS_PRODUCTION"))
     )
 
 
@@ -1808,8 +1809,12 @@ def sync_apply():
 
 @app.route("/deploy", methods=["POST"])
 def deploy():
+    # 本番環境以外では実行禁止
+    if not os.getenv("IS_PRODUCTION"):
+        return jsonify({"status": "error", "message": "deployは本番環境のみ許可されています"}), 403
     import subprocess
     import os
+
     try:
         result = subprocess.run(
             ["bash", os.path.expanduser("~/deploy.sh")],
@@ -1818,14 +1823,9 @@ def deploy():
         )
 
         if result.returncode == 0:
-            return jsonify({"status": "success", "message": "deployed!"})
-        else:
             return jsonify(
-                {
-                    "status": "error",
-                    "message": result.stderr or "Unknown error",
-                }
-            ), 500
+                {"status": "success", "message": "deployed!", "log": result.stdout}
+            )
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
