@@ -11,7 +11,7 @@ try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
-    
+
 # OpenAIは任意（APIキーがない環境でも動作させる）
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key) if (api_key and OpenAI) else None
@@ -1804,6 +1804,14 @@ def sync_apply():
             "errors": diff["errors"],
         }
     )
+
+
+@app.route("/deploy", methods=["POST"])
+def deploy():
+    import os
+
+    os.system("bash ~/deploy.sh")
+    return "deployed"
 
 
 if __name__ == "__main__":
