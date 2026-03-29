@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Projects</title>
+</head>
+<body>
+
+<h1>Projects</h1>
+
+<form action="/add_project" method="post">
+    <input name="name" placeholder="Project name">
+
+    <select name="type">
+        <option value="research">Research</option>
+        <option value="class">Class</option>
+        <option value="admin">Admin</option>
+        <option value="student">Student</option>
+        <option value="external">External</option>
+    </select>
+
+    <button type="submit">追加</button>
+</form>
+
+<hr>
+
+<ul>
+{% for p in projects %}
+    <li>
+        <a href="/project/{{ p[0] }}">
+            {{ p[1] }} ({{ p[2] }})
+        </a>
+    </li>
+{% endfor %}
+</ul>
+
+<a href="/">← Dashboard</a>
+
+</body>
+</html>

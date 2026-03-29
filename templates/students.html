@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+    <head>
+        <title>学生ログ</title>
+    </head>
+    <body>
+        <h1>学生ログ</h1>
+        <p>学生名を選ぶと、関連タスク・メモ・締切変更履歴を確認できます。</p>
+
+        <ul>
+            {% for s in students %}
+            <li><a href="/student_log?name={{ s }}">{{ s }}</a></li>
+            {% endfor %}
+        </ul>
+
+        <a href="/">← Dashboard</a>
+    </body>
+</html>

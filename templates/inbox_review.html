@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Inbox</title>
+    </head>
+    <body>
+        <h1>Inbox整理</h1>
+        <p>ここは未整理タスクを振り分ける画面です</p>
+        <ul>
+            {% for t in tasks %}
+            <li>
+                {% if t["priority"] == "high" %}🔥{% endif %}
+                <b>{{ t["title"] }}</b>
+
+                {% if t["deadline"] %}
+                    [{{ t["deadline"] }}]
+                {% else %}
+                    [期限なし]
+                {% endif %}
+
+                <form action="/move_task" method="post" style="display: inline">
+                    <input type="hidden" name="task_id" value="{{ t["id"] }}" />
+
+                    <select name="project_id">
+                        {% for p in projects %}
+                        <option value="{{ p["id"] }}">{{ p["name"] }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <button type="submit">移動</button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+
+        <a href="/">← Dashboard</a>
+    </body>
+</html>

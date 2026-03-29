@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+    <title>学生ログ</title>
+</head>
+<body>
+    <h1>{{ student_name }} の研究指導ログ</h1>
+
+    <p><a href="/students">← 学生一覧</a> | <a href="/">Dashboard</a></p>
+
+    <h2>関連タスク</h2>
+    <ul>
+        {% for t in tasks %}
+        <li>
+            {% if t["priority"] == "high" %}🔥{% endif %}
+            {{ t["title"] }}
+            （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+            {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+            {% if t["status"] == "done" %}[完了]{% endif %}
+        </li>
+        {% else %}
+        <li>関連タスクはありません。</li>
+        {% endfor %}
+    </ul>
+
+    <h2>関連メモ</h2>
+    <ul>
+        {% for n in notes %}
+        <li>
+            <b>{{ n["title"] }}</b>
+            （<a href="/project/{{ n["project_id"] }}">{{ n["project_name"] }}</a>）<br>
+            {{ n["content"] }}<br>
+            <small>{{ n["created_at"] }}</small>
+            {% if n["scrapbox_url"] %}
+            <a href="{{ n["scrapbox_url"] }}">Scrapbox</a>
+            {% endif %}
+        </li>
+        {% else %}
+        <li>関連メモはありません。</li>
+        {% endfor %}
+    </ul>
+
+    <h2>締切変更履歴</h2>
+    <ul>
+        {% for h in history %}
+        <li>
+            <b>{{ h["task_title"] }}</b>
+            （<a href="/project/{{ h["project_id"] }}">{{ h["project_name"] }}</a>）<br>
+            {% if h["old_deadline_display"] %}{{ h["old_deadline_display"] }}{% else %}未設定{% endif %}
+            →
+            {% if h["new_deadline_display"] %}{{ h["new_deadline_display"] }}{% else %}未設定{% endif %}
+            <small>({{ h["changed_at"] }})</small>
+        </li>
+        {% else %}
+        <li>締切変更履歴はありません。</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

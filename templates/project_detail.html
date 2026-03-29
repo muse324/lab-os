@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Project</title>
+</head>
+<body>
+
+<h1>{{ project["name"] }}</h1>
+
+<h2>タスク追加</h2>
+
+<form action="/add_task" method="post">
+    <input name="title" placeholder="タスク内容">
+    <input type="date" name="deadline">
+
+    <select name="priority">
+        <option value="medium" selected>通常</option>
+        <option value="high">重要</option>
+    </select>
+
+    <input type="hidden" name="project_id" value="{{ project["id"] }}">
+    <input type="hidden" name="student_id" value="{{ request.args.get('student_id', '') }}">
+    <input type="hidden" name="next" value="/project/{{ project["id"] }}">
+
+    <button type="submit">追加</button>
+</form>
+
+<hr>
+
+<h2>タスク</h2>
+
+<ul>
+{% for t in tasks %}
+    <li>
+        {% if t["priority"] == "high" %}
+            🔥
+        {% endif %}
+
+        {% if t["status"] == "done" %}
+            <s>{{ t["title"] }}</s>
+        {% else %}
+            {{ t["title"] }}
+        {% endif %}
+
+        {% if t["deadline"] %}
+            [{{ t["deadline"] }}]
+        {% endif %}
+
+        <a href="/done/{{ t["task_id"] }}">[完了]</a>
+    </li>
+{% endfor %}
+</ul>
+
+<hr>
+
+<h2>リスケ履歴</h2>
+{% if request.args.get("task_id") %}
+<p>※このタスクの履歴のみ表示</p>
+{% endif %}
+<ul>
+{% for h in history %}
+    <li>
+        <b>{{ h["task_title"] }}</b><br>
+        {{ h["old_deadline"] }} → {{ h["new_deadline"] }}
+        <small>({{ h["changed_at"] }})</small>
+    </li>
+{% endfor %}
+</ul>
+
+<hr>
+
+<h2>メモ一覧</h2>
+
+<h3>メモ追加</h3>
+
+<form action="/add_note" method="post">
+    <input name="title" placeholder="タイトル"><br>
+
+    <textarea name="content" placeholder="内容"></textarea><br>
+
+    <input name="scrapbox_url" placeholder="Scrapbox URL"><br>
+
+    <input type="hidden" name="project_id" value="{{ project["id"] }}">
+    <input type="hidden" name="student_id" value="{{ request.args.get('student_id', '') }}">
+    <button type="submit">保存</button>
+
+    <!-- Scrapbox生成 -->
+    <button type="button" onclick="
+        const title = document.getElementsByName('title')[0].value;
+        if(title){
+            window.open(
+                'https://scrapbox.io/あなたのプロジェクト名/' + encodeURIComponent(title),
+                '_blank'
+            );
+        } else {
+            alert('タイトルを入力してください');
+        }
+    ">
+        Scrapbox作成
+    </button>
+</form>
+
+<hr>
+
+<ul>
+{% for n in notes %}
+    <li>
+        <b>{{ n["title"] }}</b><br>
+        {{ n["content"] }}<br>
+
+        {% if n["scrapbox_url"] %}
+            <a href="{{ n["scrapbox_url"] }}">開く</a>
+        {% else %}
+            <a href="https://scrapbox.io/musestudio/{{ n["title"] }}" target="_blank">
+                Scrapbox作成
+            </a>
+        {% endif %}
+
+        <br>
+        <small>{{ n["created_at"] }}</small>
+    </li>
+{% endfor %}
+</ul>
+
+<hr>
+
+<a href="/projects">← Projects</a><br>
+<a href="/">← Dashboard</a>
+
+</body>
+</html>

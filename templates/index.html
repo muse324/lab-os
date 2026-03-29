@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Lab OS</title>
+    </head>
+    <body>
+        <h1>Lab OS Dashboard</h1>
+        <!-- タスクインポート / 同期 -->
+        <h2>タスク同期</h2>
+        <form id="syncForm">
+            <textarea id="memoInput"
+                    name="memo"
+                    placeholder="メモを貼り付けて、ローカルでJSON自動生成"
+                    style="width:100%;
+                            height:120px"></textarea>
+            <br>
+            <button type="button" onclick="generateSyncJson()">JSON生成</button>
+            <br><br>
+
+            <textarea id="jsonInput"
+                    name="json"
+                    placeholder="JSON貼り付け（sync_key省略可）"
+                    style="width:100%;
+                            height:150px"></textarea>
+            <br>
+            <button type="button" onclick="previewSync()">差分確認</button>
+            <button type="button" onclick="applySync()">同期実行</button>
+            <button type="button" onclick="importTasks()">従来インポート</button>
+        </form>
+        <div id="syncResult"
+             style="background:#f5f5f5;
+                    padding:10px;
+                    white-space:pre-wrap"></div>
+        <script>
+        // --- スクロール位置保存 ---
+        window.addEventListener("beforeunload", () => {
+            localStorage.setItem("scrollY", window.scrollY);
+        });
+
+        window.addEventListener("load", () => {
+            const y = localStorage.getItem("scrollY");
+            if (y !== null) {
+                window.scrollTo(0, parseInt(y));
+                localStorage.removeItem("scrollY");
+            }
+        });
+        function fieldLabel(field) {
+            const labels = {
+                title: "タイトル",
+                deadline: "締切",
+                project_id: "プロジェクト",
+                student_id: "学生ID",
+                priority: "優先度",
+                status: "状態",
+                archived: "アーカイブ",
+                source_type: "同期元",
+                source_updated_at: "元データ更新時刻"
+            };
+            return labels[field] || field;
+        }
+
+        function formatValue(value) {
+            if (value === null || value === undefined || value === "") {
+                return "未設定";
+            }
+            if (value === 0 || value === "0") {
+                return "いいえ";
+            }
+            if (value === 1 || value === "1") {
+                return "はい";
+            }
+            if (value === "todo") {
+                return "未完了";
+            }
+            if (value === "done") {
+                return "完了";
+            }
+            if (value === "high") {
+                return "重要";
+            }
+            if (value === "medium") {
+                return "通常";
+            }
+            return String(value);
+        }
+
+        function renderSyncResult(data, mode) {
+            const lines = [];
+
+            if (mode === "preview") {
+                lines.push("差分確認結果");
+                lines.push("------------------------------");
+                lines.push(`新規追加: ${data.create}件`);
+                lines.push(`更新: ${data.update}件`);
+                lines.push(`アーカイブ: ${data.archive}件`);
+                lines.push(`変更なし: ${data.unchanged}件`);
+            } else {
+                lines.push("同期実行結果");
+                lines.push("------------------------------");
+                lines.push(`新規追加: ${data.created}件`);
+                lines.push(`更新: ${data.updated}件`);
+                lines.push(`アーカイブ: ${data.archived}件`);
+                lines.push(`変更なし: ${data.unchanged}件`);
+            }
+
+            if (data.errors && data.errors.length > 0) {
+                lines.push("");
+                lines.push("エラー:");
+                data.errors.forEach((err, i) => {
+                    lines.push(`  ${i + 1}. ${err.reason}`);
+                });
+            }
+
+            if (mode === "preview" && data.details) {
+                if (data.details.create && data.details.create.length > 0) {
+                    lines.push("");
+                    lines.push("追加予定:");
+                data.details.create.forEach((item, i) => {
+                    lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
+                    lines.push(`     プロジェクト: ${formatValue(item.project_name)}`);
+                    lines.push(`     締切: ${formatValue(item.deadline)}`);
+                    lines.push(`     優先度: ${formatValue(item.priority)}`);
+                    lines.push(`     状態: ${formatValue(item.status)}`);
+                    lines.push(`     同期キー: ${formatValue(item.sync_key)}`);
+                });
+                }
+
+                if (data.details.update && data.details.update.length > 0) {
+                    lines.push("");
+                    lines.push("更新予定:");
+                    data.details.update.forEach((item, i) => {
+                        lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
+                        lines.push(`     同期キー: ${item.sync_key}`);
+                        item.changes.forEach((change) => {
+                            lines.push(
+                                `     ${fieldLabel(change.field)}: ${formatValue(change.old)} → ${formatValue(change.new)}`
+                            );
+                        });
+                    });
+                }
+
+                if (data.details.archive && data.details.archive.length > 0) {
+                    lines.push("");
+                    lines.push("アーカイブ予定:");
+                    data.details.archive.forEach((item, i) => {
+                        lines.push(`  ${i + 1}. ${item.sync_key}`);
+                    });
+                }
+            }
+
+            document.getElementById("syncResult").textContent = lines.join("\n");
+        }
+        
+        async function generateSyncJson() {
+            const memo = document.getElementById("memoInput").value;
+            const res = await fetch("/generate_sync_json", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "memo=" + encodeURIComponent(memo)
+            });
+            const data = await res.json();
+
+            if (data.error) {
+                document.getElementById("syncResult").textContent = "JSON生成エラー: " + data.error;
+                return;
+            }
+
+            document.getElementById("jsonInput").value = JSON.stringify(data.tasks, null, 2);
+            document.getElementById("syncResult").textContent = `JSON生成完了: ${data.tasks.length}件（ローカル解析）`;
+        }
+
+        async function previewSync() {
+            const json = document.getElementById("jsonInput").value;
+            const res = await fetch("/sync_preview", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "json=" + encodeURIComponent(json)
+            });
+            const data = await res.json();
+            renderSyncResult(data, "preview");
+        }
+
+        async function refreshUpdatedTasks(taskIds) {
+            if (!taskIds || taskIds.length === 0) {
+                return;
+            }
+
+            const res = await fetch("/");
+            const html = await res.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, "text/html");
+
+            taskIds.forEach((taskId) => {
+                const current = document.querySelector(`[data-task-id="${taskId}"]`);
+                const fresh = doc.querySelector(`[data-task-id="${taskId}"]`);
+
+                if (current && fresh) {
+                    current.replaceWith(fresh);
+                    markTaskUpdated(taskId);
+                }
+            });
+        }
+
+        function markTaskUpdated(taskId) {
+            const li = document.querySelector(`[data-task-id="${taskId}"]`);
+            if (!li) return;
+
+            li.style.backgroundColor = "#fff7cc";
+            li.style.transition = "background-color 0.3s ease";
+
+            const oldBadge = li.querySelector(".updated-badge");
+            if (oldBadge) {
+                oldBadge.remove();
+            }
+
+            const badge = document.createElement("span");
+            badge.className = "updated-badge";
+            badge.textContent = "更新済み";
+            badge.style.marginLeft = "8px";
+            badge.style.padding = "2px 6px";
+            badge.style.fontSize = "0.8em";
+            badge.style.border = "1px solid #cc9a00";
+            badge.style.borderRadius = "8px";
+            badge.style.backgroundColor = "#fff0b3";
+
+            li.appendChild(badge);
+        }
+
+        async function applySync() {
+            const json = document.getElementById("jsonInput").value;
+            const res = await fetch("/sync_apply", {
+                method: "POST",
+                headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                body: "json=" + encodeURIComponent(json)
+            });
+            const data = await res.json();
+            renderSyncResult(data, "apply");
+            await refreshUpdatedTasks(data.updated_task_ids || []);
+        }
+
+        async function importTasks() {
+            const json = document.getElementById("jsonInput").value;
+            const form = document.createElement("form");
+            form.method = "POST";
+            form.action = "/import_tasks";
+
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "json";
+            input.value = json;
+
+            form.appendChild(input);
+            document.body.appendChild(form);
+            form.submit();
+        }
+        </script>
+        <!-- クイック入力 -->
+        <h2>クイック入力</h2>
+        <form action="/quick_add" method="post">
+            <input name="text" placeholder="例：明日までに授業スライド作る（重要）">
+            <button type="submit">追加</button>
+        </form>
+        <hr>
+        <!-- 手動タスク追加 -->
+        <h2>タスク追加</h2>
+        <form action="/add_task" method="post">
+            <input name="title" placeholder="タスク内容">
+            <input type="date" name="deadline">
+            <select name="project_id">
+                {% for p in projects %}<option value="{{ p[0] }}">{{ p[1] }}</option>{% endfor %}
+            </select>
+            <select name="priority">
+                <option value="medium" selected>通常</option>
+                <option value="high">重要</option>
+            </select>
+            <input type="hidden" name="next" value="/">
+            <button type="submit">追加</button>
+        </form>
+        <hr>
+        <!-- 期限切れ -->
+        <h2>⚠ 期限切れ</h2>
+        <ul>
+            {% for t in overdue %}
+                <li data-task-id="{{ t["task_id"] }}" style="color:red">
+                    {% if t["priority"] == "high" %}🔥{% endif %}
+                    {{ t["title"] }}
+                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+                    {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+                    {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
+                        (元: {{ t["original_deadline_display"] }})
+                    {% endif %}
+                    <form action="/done/{{ t["task_id"] }}"
+                          method="post"
+                          style="display:inline;
+                                 margin-left:4px">
+                        <button type="submit">完了</button>
+                    </form>
+                    <!-- 更新フォーム -->
+                    <form action="/update_task" method="post" style="display:inline;">
+                        <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+                        <input type="date" name="deadline">
+                        <label>
+                            <input type="checkbox" name="priority" value="high">
+                            重要
+                        </label>
+                        <button type="submit">更新</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        <hr>
+        <!-- 今日 -->
+        <h2>今日のタスク</h2>
+        <ul>
+            {% for t in today %}
+                <li data-task-id="{{ t["task_id"] }}" style="color:orange">
+                    {% if t["priority"] == "high" %}🔥{% endif %}
+                    {{ t["title"] }}
+                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+                    [{{ t["deadline_display"] }}]
+                    <form action="/done/{{ t["task_id"] }}"
+                          method="post"
+                          style="display:inline;
+                                 margin-left:4px">
+                        <button type="submit">完了</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        <hr>
+        <!-- その他 -->
+        <h2>今後の〆切</h2>
+        <ul>
+            {% for t in tasks_todo %}
+                <li data-task-id="{{ t["task_id"] }}">
+                    {% if t["priority"] == "high" %}🔥{% endif %}
+                    {{ t["title"] }}
+                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+                    {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+                    <form action="/done/{{ t["task_id"] }}"
+                          method="post"
+                          style="display:inline;
+                                 margin-left:4px">
+                        <button type="submit">完了</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        <h2>いつでも</h2>
+        <ul>
+            {% for t in tasks_todo_anytime %}
+                <li data-task-id="{{ t["task_id"] }}">
+                    {% if t["priority"] == "high" %}🔥{% endif %}
+                    {{ t["title"] }}
+                    （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+                    <a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+                    {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+                    <form action="/done/{{ t["task_id"] }}"
+                          method="post"
+                          style="display:inline;
+                                 margin-left:4px">
+                        <button type="submit">完了</button>
+                    </form>
+                    <!-- 更新フォーム -->
+                    <form action="/update_task" method="post" style="display:inline;">
+                        <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+                        <input type="date" name="deadline">
+                        <label>
+                            <input type="checkbox" name="priority" value="high">
+                            重要
+                        </label>
+                        <button type="submit">更新</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        <hr>
+        <!-- 完了済み -->
+        <h3>完了済み</h3>
+        <ul>
+            {% for t in tasks_done %}
+                <li>
+                    <s>{{ t["title"] }}</s>（{{ t["name"] }}）
+                </li>
+            {% endfor %}
+        </ul>
+        <hr>
+        <!-- ナビ -->
+        <a href="/inbox">Inbox（未整理タスク）</a>
+        <br>
+        <a href="/projects">Projects</a>
+        <br>
+        <a href="/students">学生ログ</a>
+    </body>
+</html>
