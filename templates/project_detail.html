@@ -3,251 +3,35 @@
 <head>
     <title>Project</title>
     <script>
-function normalizeName(str) {
-    return (str || "")
-        .replace(/[ 　]/g, "")
-        .replace(/さん|くん|君|氏/g, "")
-        .toLowerCase();
-}
-
-function linkStudentNames(container) {
-    let students;
-    try {
-        students = {{ students | default([]) | tojson | safe }};
-    } catch (e) {
-        console.error("students JSON parse error:", e);
-        return;
-    }
-
-    if (!Array.isArray(students) || students.length === 0 || !container) return;
-
-    const nameMap = new Map();
-
-    students.forEach((s) => {
-        try {
-            if (!s || typeof s.name !== "string") return;
-            if (!s.student_id || isNaN(Number(s.student_id))) return;
-
-            const key = normalizeName(s.name);
-            if (!key) return;
-
-            if (!nameMap.has(key)) {
-                nameMap.set(key, {
-                    rawName: s.name,
-                    student_id: Number(s.student_id),
-                });
-            }
-        } catch (e) {
-            console.warn("invalid student row skipped:", s);
-        }
-    });
-
-    if (nameMap.size === 0) return;
-
-    let combinedPattern;
-    try {
-        const escapedNames = Array.from(nameMap.values())
-            .map((s) => s.rawName)
-            .filter((name) => typeof name === "string" && name.length > 0)
-            .sort((a, b) => b.length - a.length)
-            .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-
-        if (escapedNames.length === 0) return;
-
-        combinedPattern = new RegExp(
-            `(${escapedNames.join("|")})(?:さん|くん|君|氏)?`,
-            "g"
-        );
-    } catch (e) {
-        console.error("RegExp build failed:", e);
-        return;
-    }
-
-    function walk(node) {
-        try {
-            if (node.nodeType === Node.TEXT_NODE) {
-                const text = node.nodeValue;
-                if (!text || !combinedPattern.test(text)) {
-                    combinedPattern.lastIndex = 0;
-                    return;
-                }
-                combinedPattern.lastIndex = 0;
-
-                const parent = node.parentNode;
-                if (!parent) return;
-
-                let lastIndex = 0;
-                const fragments = [];
-                let match;
-
-                while ((match = combinedPattern.exec(text)) !== null) {
-                    const matchedText = match[0];
-                    const normalizedMatched = normalizeName(matchedText);
-                    const matchedStudent = nameMap.get(normalizedMatched);
-                    if (!matchedStudent) continue;
-
-                    if (match.index > lastIndex) {
-                        fragments.push(document.createTextNode(text.slice(lastIndex, match.index)));
-                    }
-
-                    const a = document.createElement("a");
-                    a.href = `/student_log?name=${encodeURIComponent(matchedStudent.rawName)}`;
-                    a.style.color = "inherit";
-                    a.style.textDecoration = "underline";
-                    a.textContent = matchedText;
-                    a.className = "student-link";
-                    a.dataset.studentName = matchedStudent.rawName;
-                    a.dataset.studentId = String(matchedStudent.student_id);
-                    fragments.push(a);
-
-                    lastIndex = match.index + matchedText.length;
-                }
-
-                if (fragments.length === 0) {
-                    combinedPattern.lastIndex = 0;
-                    return;
-                }
-
-                if (lastIndex < text.length) {
-                    fragments.push(document.createTextNode(text.slice(lastIndex)));
-                }
-
-                fragments.forEach((fragment) => parent.insertBefore(fragment, node));
-                parent.removeChild(node);
-                combinedPattern.lastIndex = 0;
-                return;
-            }
-
-            if (node.nodeType === Node.ELEMENT_NODE) {
-                const tagName = node.tagName ? node.tagName.toLowerCase() : "";
-                if (["a", "button", "textarea", "input", "select", "option", "script", "style"].includes(tagName)) {
-                    return;
-                }
-                Array.from(node.childNodes).forEach(walk);
-            }
-        } catch (e) {
-            console.error("walk error:", e);
-        }
-    }
-
-    walk(container);
-}
-
-let studentSummaryTooltip;
-let studentSummaryAbortController = null;
-const studentSummaryCache = new Map();
-
-function ensureStudentSummaryTooltip() {
-    if (studentSummaryTooltip) return studentSummaryTooltip;
-
-    studentSummaryTooltip = document.createElement("div");
-    studentSummaryTooltip.id = "studentSummaryTooltip";
-    studentSummaryTooltip.style.position = "fixed";
-    studentSummaryTooltip.style.display = "none";
-    studentSummaryTooltip.style.maxWidth = "320px";
-    studentSummaryTooltip.style.padding = "8px 10px";
-    studentSummaryTooltip.style.background = "#fffbe6";
-    studentSummaryTooltip.style.border = "1px solid #cc9a00";
-    studentSummaryTooltip.style.borderRadius = "8px";
-    studentSummaryTooltip.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
-    studentSummaryTooltip.style.fontSize = "0.9em";
-    studentSummaryTooltip.style.lineHeight = "1.4";
-    studentSummaryTooltip.style.zIndex = "9999";
-    studentSummaryTooltip.style.pointerEvents = "none";
-    document.body.appendChild(studentSummaryTooltip);
-    return studentSummaryTooltip;
-}
-
-function positionStudentSummaryTooltip(event) {
-    const tooltip = ensureStudentSummaryTooltip();
-    tooltip.style.left = `${event.clientX + 14}px`;
-    tooltip.style.top = `${event.clientY + 14}px`;
-}
-
-function renderStudentSummary(summary) {
-    const nextTasks = (summary.next_tasks || [])
-        .map((task) => {
-            const deadline = task.deadline ? ` [${task.deadline}]` : "";
-            return `・${task.title}${deadline}`;
-        })
-        .join("<br>");
-
-    return [
-        `<strong>${summary.name}</strong>`,
-        `未完了: ${summary.todo_count}件 / 完了: ${summary.done_count}件 / 期限切れ: ${summary.overdue_count}件`,
-        nextTasks ? `直近タスク:<br>${nextTasks}` : "直近タスク: なし",
-    ].join("<br>");
-}
-
-async function showStudentSummary(link, event) {
-    const tooltip = ensureStudentSummaryTooltip();
-    const name = link.dataset.studentName;
-    if (!name) return;
-
-    positionStudentSummaryTooltip(event);
-    tooltip.style.display = "block";
-    tooltip.innerHTML = "読込中...";
-
-    if (studentSummaryCache.has(name)) {
-        tooltip.innerHTML = renderStudentSummary(studentSummaryCache.get(name));
-        return;
-    }
-
-    if (studentSummaryAbortController) {
-        studentSummaryAbortController.abort();
-    }
-    studentSummaryAbortController = new AbortController();
-
-    try {
-        const res = await fetch(`/student_summary?name=${encodeURIComponent(name)}`, {
-            signal: studentSummaryAbortController.signal,
-        });
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-        }
-        const data = await res.json();
-        studentSummaryCache.set(name, data);
-        tooltip.innerHTML = renderStudentSummary(data);
-    } catch (error) {
-        if (error.name === "AbortError") return;
-        tooltip.innerHTML = "サマリ取得失敗";
-    }
-}
-
-function hideStudentSummary() {
-    const tooltip = ensureStudentSummaryTooltip();
-    tooltip.style.display = "none";
-}
-
-function bindStudentSummaryHover(root = document) {
-    root.querySelectorAll("a.student-link").forEach((link) => {
-        if (link.dataset.hoverBound === "1") return;
-        link.dataset.hoverBound = "1";
-
-        link.addEventListener("mouseenter", (event) => {
-            showStudentSummary(link, event);
-        });
-        link.addEventListener("mousemove", (event) => {
-            positionStudentSummaryTooltip(event);
-        });
-        link.addEventListener("mouseleave", () => {
-            hideStudentSummary();
-        });
-        link.addEventListener("blur", () => {
-            hideStudentSummary();
-        });
-    });
-}
-
-window.addEventListener("load", () => {
-    document.querySelectorAll(".task-title-scope, .note-title-scope, .history-title-scope").forEach((el) => {
-        linkStudentNames(el);
-    });
-    bindStudentSummaryHover(document);
-});
+        window.students = {{ students | tojson | safe }};
     </script>
+    <script src="/static/js/student-modules.js"></script>
 </head>
 <body>
+     <script>
+        // --- スクロール位置保存 ---
+        window.addEventListener("beforeunload", () => {
+            localStorage.setItem("scrollY", window.scrollY);
+        });
+
+        window.addEventListener("load", () => {
+            const y = localStorage.getItem("scrollY");
+            if (y !== null) {
+                window.scrollTo(0, parseInt(y));
+                localStorage.removeItem("scrollY");
+            }
+
+            // --- 学生リンク初期化 ---
+            document.querySelectorAll("[data-task-id], .task-title-scope, .note-title-scope, .history-title-scope").forEach((el) => {
+                StudentLinkModule.linkStudentNames(el);
+            });
+
+            // --- ツールチップ初期化 ---
+            if (typeof StudentTooltipModule !== "undefined") {
+                StudentTooltipModule.bind(document);
+            }
+        });
+    </script>
 
 {% macro edit_form(task_id) %}
     <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
