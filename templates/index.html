@@ -10,12 +10,12 @@
     </head>
     <body>
         <h1>Lab OS Dashboard</h1>
-        {% from "components/task_item.html" import edit_form, render_task_item %}
+        {% from "components/task_item.html" import edit_form, render_task_item, task_actions %}
         {% if is_production %}
-        <form id="deployForm" onsubmit="runDeploy(event)">
-            <button type="submit">最新コードに更新</button>
-            <span id="deployResult" style="margin-left:10px;"></span>
-        </form>
+            <form id="deployForm" onsubmit="runDeploy(event)">
+                <button type="submit">最新コードに更新</button>
+                <span id="deployResult" style="margin-left:10px;"></span>
+            </form>
         {% endif %}
         <button type="button" onclick="exportMemo()" title="現在の全タスクをメモとして出力（再生成・整理用）">📄 全タスクをメモ化</button>
         <button type="button" onclick="exportDelta()" title="前回からの変更分のみをメモとして出力（更新反映用）">🔄 変更分だけメモ化</button>
@@ -83,6 +83,27 @@
                     StudentTooltipModule.bind(document);
                 }
             });
+            function toggleInlineEdit(button) {
+                const form = button.closest(".inline-edit-form");
+                if (!form) return;
+                const titleSpan = form.querySelector(".inline-edit-title");
+                const titleInput = form.querySelector(".inline-edit-input");
+                if (!titleInput || !titleSpan) return;
+                const isEditing = titleInput.style.display !== "none";
+                if (!isEditing) {
+                    titleSpan.style.display = "none";
+                    titleInput.style.display = "inline-block";
+                    button.textContent = "OK";
+                    const strike = form.querySelector("s");
+                    if (strike) {
+                        strike.style.display = "none";
+                    }
+                    titleInput.focus();
+                    titleInput.select();
+                } else {
+                    form.submit();
+                }
+            }
             function fieldLabel(field) {
                 const labels = {
                     title: "タイトル (title)",
@@ -537,6 +558,7 @@
             {% for t in overdue %}
                 <h2>⚠ 期限切れ</h2>
                 <ul>
+                    {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
                     {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red") }}
                 </ul>
                 <hr>
@@ -567,9 +589,8 @@
             <h3>完了済み</h3>
             <ul>
                 {% for t in tasks_done %}
-                    <li>
-                        <s>{{ t["title"] }}</s>
-                        {{ edit_form(t["id"]) }}
+                    <li class="task-title-scope">
+                        {{ edit_form(t["id"], t["title"], true) }}
                         （{{ t["name"] }}）
                     </li>
                 {% endfor %}

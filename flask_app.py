@@ -916,7 +916,8 @@ def done_task(task_id):
         conn.commit()
     finally:
         conn.close()
-    return redirect("/")
+    next_url = request.form.get("next")
+    return redirect(next_url or "/")
 
 
 @app.route("/project/<int:project_id>")
@@ -2220,8 +2221,8 @@ def edit_task_title():
     finally:
         conn.close()
 
-    return redirect("/")
-
+    next_url = request.form.get("next")
+    return redirect(next_url or "/")
 
 if __name__ == "__main__":
     init_db()

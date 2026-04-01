@@ -32,14 +32,8 @@
             }
         });
     </script>
+    {% from "components/task_item.html" import edit_form, task_actions %}
 
-{% macro edit_form(task_id) %}
-    <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
-        <input type="hidden" name="task_id" value="{{ task_id }}">
-        <input type="text" name="title" placeholder="編集" style="width:120px;">
-        <button type="submit">変更</button>
-    </form>
-{% endmacro %}
 
 <h1>{{ project["name"] }}</h1>
 
@@ -68,21 +62,22 @@
 {% for t in overdue_tasks %}
     <li class="task-title-scope" style="color:red;">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ t["title"] }}
-        {{ edit_form(t["task_id"]) }}
+        {{ edit_form(t["task_id"], t["title"]) }}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
             (元: {{ t["original_deadline_display"] }})
         {% endif %}
         <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
             <button type="submit">完了</button>
         </form>
         <form action="/update_task" method="post" style="display:inline;">
             <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
             <input type="date" name="deadline">
             <label>
-                <input type="checkbox" name="priority" value="high">
+                <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
                 重要
             </label>
             <button type="submit">更新</button>
@@ -96,18 +91,19 @@
 {% for t in today_tasks %}
     <li class="task-title-scope" style="color:orange;">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ t["title"] }}
-        {{ edit_form(t["task_id"]) }}
+        {{ edit_form(t["task_id"], t["title"]) }}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
             <button type="submit">完了</button>
         </form>
         <form action="/update_task" method="post" style="display:inline;">
             <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
             <input type="date" name="deadline">
             <label>
-                <input type="checkbox" name="priority" value="high">
+                <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
                 重要
             </label>
             <button type="submit">更新</button>
@@ -121,22 +117,7 @@
 {% for t in future_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ t["title"] }}
-        {{ edit_form(t["task_id"]) }}
-        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
-        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
-        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
-            <button type="submit">完了</button>
-        </form>
-        <form action="/update_task" method="post" style="display:inline;">
-            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
-            <input type="date" name="deadline">
-            <label>
-                <input type="checkbox" name="priority" value="high">
-                重要
-            </label>
-            <button type="submit">更新</button>
-        </form>
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
     </li>
 {% endfor %}
 </ul>
@@ -146,21 +127,7 @@
 {% for t in anytime_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ t["title"] }}
-        {{ edit_form(t["task_id"]) }}
-        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
-        <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
-            <button type="submit">完了</button>
-        </form>
-        <form action="/update_task" method="post" style="display:inline;">
-            <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
-            <input type="date" name="deadline">
-            <label>
-                <input type="checkbox" name="priority" value="high">
-                重要
-            </label>
-            <button type="submit">更新</button>
-        </form>
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
     </li>
 {% endfor %}
 </ul>
@@ -170,10 +137,7 @@
 {% for t in done_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        <s>{{ t["title"] }}</s>
-        {{ edit_form(t["task_id"]) }}
-        <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
-        {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
     </li>
 {% endfor %}
 </ul>
@@ -183,12 +147,7 @@
 {% for t in archived_tasks %}
     <li class="task-title-scope" style="color:#888;">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {% if t["status"] == "done" %}
-            <s>{{ t["title"] }}</s>
-        {% else %}
-            {{ t["title"] }}
-        {% endif %}
-        {{ edit_form(t["task_id"]) }}
+        {{ edit_form(t["task_id"], t["title"], t["status"] == "done") }}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         <small>（{{ t["archive_reason"] }}）</small>
@@ -272,5 +231,28 @@
 <a href="/projects">← Projects</a><br>
 <a href="/">← Dashboard</a>
 
+    <script>
+        function toggleInlineEdit(button) {
+            const form = button.closest(".inline-edit-form");
+            if (!form) return;
+            const titleSpan = form.querySelector(".inline-edit-title");
+            const titleInput = form.querySelector(".inline-edit-input");
+            if (!titleInput || !titleSpan) return;
+            const isEditing = titleInput.style.display !== "none";
+            if (!isEditing) {
+                titleSpan.style.display = "none";
+                titleInput.style.display = "inline-block";
+                button.textContent = "OK";
+                                const strike = form.querySelector("s");
+                if (strike) {
+                    strike.style.display = "none";
+                }
+                titleInput.focus();
+                titleInput.select();
+            } else {
+                form.submit();
+            }
+        }
+    </script>
 </body>
 </html>

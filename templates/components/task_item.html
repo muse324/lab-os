@@ -1,51 +1,70 @@
-{% macro edit_form(task_id) %}
-    <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
+{% macro task_actions(t, show_done=true, show_update=false, is_done=false) %}
+    <form action="/edit_task_title" method="post" class="inline-edit-form" style="display:inline; margin-left:6px;">
+        <input type="hidden" name="task_id" value="{{ t["task_id"] if t["task_id"] is defined else t["id"] }}">
+        <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+
+        {% if is_done %}
+            <s><span class="inline-edit-title">{{ t["title"] }}</span></s>
+        {% else %}
+            <span class="inline-edit-title">{{ t["title"] }}</span>
+        {% endif %}
+
+        <input type="text" name="title" value="{{ t["title"] }}" class="inline-edit-input" style="display:none; width:120px;">
+        <button type="button" class="inline-edit-toggle" onclick="toggleInlineEdit(this)">変更</button>
+    </form>
+    <!-- 完了ボタン -->
+    {% if show_done %}
+        <form action="/done/{{ t["task_id"] if t["task_id"] is defined else t["id"] }}" method="post" style="display:inline; margin-left:4px">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+            <button type="submit">完了</button>
+        </form>
+    {% endif %}
+    <!-- 日付更新 -->
+    {% if show_update %}
+        <form action="/update_task" method="post" style="display:inline;">
+            <input type="hidden" name="task_id" value="{{ t["task_id"] if t["task_id"] is defined else t["id"] }}">
+            <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+            <input type="date" name="deadline" value="{{ t["deadline"] if t["deadline"] is defined and t["deadline"] else "" }}">
+            <label>
+                <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
+                重要
+            </label>
+            <button type="submit">更新</button>
+        </form>
+    {% endif %}
+{% endmacro %}
+
+{% macro edit_form(task_id, title, is_done=false) %}
+    {% set t = {"task_id": task_id, "title": title, "priority": "medium"} %}
+    {{ task_actions(t, show_done=false, show_update=false, is_done=is_done) }}
+{% endmacro %}
+
+
+
+
+{% macro edit_form(task_id, title, is_done=false) %}
+    <form action="/edit_task_title" method="post" class="inline-edit-form" style="display:inline; margin-left:6px;">
         <input type="hidden" name="task_id" value="{{ task_id }}">
-        <input type="text" name="title" placeholder="編集" style="width:120px;">
-        <button type="submit">変更</button>
+        <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+
+        {% if is_done %}
+            <s><span class="inline-edit-title">{{ title }}</span></s>
+        {% else %}
+            <span class="inline-edit-title">{{ title }}</span>
+        {% endif %}
+
+        <input type="text" name="title" value="{{ title }}" class="inline-edit-input" style="display:none; width:120px;">
+        <button type="button" class="inline-edit-toggle" onclick="toggleInlineEdit(this)">変更</button>
     </form>
 {% endmacro %}
 
 {% macro render_task_item(t, show_deadline=true, allow_update=false, color="") %}
     <li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="{{ color }}">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ t["title"] }}
-        （{% if t["project_name"] == "Inbox" %}
-                <a href="/inbox">{{ t["project_name"] }}</a>
-            {% else %}
-                <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
-            {% endif %}
-        ）
-        <ul>
-            <li>
-            {{ edit_form(t["task_id"]) }}
-            <li><a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
-                <li>
-            {% if show_deadline and t["deadline_display"] %}
-                [{{ t["deadline_display"] }}]
-            {% endif %}
-
-            {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
-                (元: {{ t["original_deadline_display"] }})
-            {% endif %}
-
-            <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
-                <button type="submit">完了</button>
-            </form>
-
-            {% if allow_update %}
-                <ul><li><form action="/update_task" method="post" style="display:inline;">
-                    <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
-                    <input type="date" name="deadline">
-                    <label>
-                        <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
-                        重要
-                    </label>
-                    <button type="submit">更新</button>
-                </form>
-                </li></ul>
-            {% endif %}
-            </li>
-        </ul>
+        {{ task_actions(t, show_done=true, show_update=allow_update, is_done=false) }}
+        {% if show_deadline and t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+        {% if show_deadline and t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
+            (元: {{ t["original_deadline_display"] }})
+        {% endif %}
     </li>
 {% endmacro %}
