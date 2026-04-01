@@ -1,0 +1,51 @@
+{% macro edit_form(task_id) %}
+    <form action="/edit_task_title" method="post" style="display:inline; margin-left:6px;">
+        <input type="hidden" name="task_id" value="{{ task_id }}">
+        <input type="text" name="title" placeholder="編集" style="width:120px;">
+        <button type="submit">変更</button>
+    </form>
+{% endmacro %}
+
+{% macro render_task_item(t, show_deadline=true, allow_update=false, color="") %}
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="{{ color }}">
+        {% if t["priority"] == "high" %}🔥{% endif %}
+        {{ t["title"] }}
+        （{% if t["project_name"] == "Inbox" %}
+                <a href="/inbox">{{ t["project_name"] }}</a>
+            {% else %}
+                <a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>
+            {% endif %}
+        ）
+        <ul>
+            <li>
+            {{ edit_form(t["task_id"]) }}
+            <li><a href="/project/{{ t["project_id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
+                <li>
+            {% if show_deadline and t["deadline_display"] %}
+                [{{ t["deadline_display"] }}]
+            {% endif %}
+
+            {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
+                (元: {{ t["original_deadline_display"] }})
+            {% endif %}
+
+            <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
+                <button type="submit">完了</button>
+            </form>
+
+            {% if allow_update %}
+                <ul><li><form action="/update_task" method="post" style="display:inline;">
+                    <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
+                    <input type="date" name="deadline">
+                    <label>
+                        <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
+                        重要
+                    </label>
+                    <button type="submit">更新</button>
+                </form>
+                </li></ul>
+            {% endif %}
+            </li>
+        </ul>
+    </li>
+{% endmacro %}

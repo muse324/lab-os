@@ -1,0 +1,25 @@
+{
+  "name": "lab-os",
+  "version": "1.0.0",
+  "description": "1. quick_add / import / sync 2. resolve_project_id_from_text（唯一の推定ロジック） 3. resolve_project_id（DB整合）",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muse324/lab-os.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/muse324/lab-os/issues"
+  },
+  "homepage": "https://github.com/muse324/lab-os#readme",
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "prettier-plugin-jinja-template": "^2.1.0"
+  }
+}
