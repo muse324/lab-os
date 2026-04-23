@@ -32,8 +32,8 @@
         <!-- ナビ -->
         <a href="/inbox">Inbox（未整理タスク）</a> / <a href="/projects">Projects</a> / <a href="/students">学生ログ</a>
         <!-- 右寄せにしたいがためのコンテナ -->
-        <div style="display:flex;justify-content:flex-end; margin-top:10px;">
-            <div>
+        <div style="margin-top:10px;">
+            <div id="actions" style="max-width:400px; width:100%; background:#f0f0f0; padding:10px; border-radius:8px; float:right; margin-left:20px;">
             <!-- タスクインポート / 同期 -->
             <h2>タスク同期</h2>
             <form id="syncForm">
@@ -530,6 +530,7 @@
                 return lines.join("\n");
             }
             </script>
+            
             <!-- クイック入力 -->
             <h2>クイック入力</h2>
             <form action="/quick_add" method="post">
@@ -552,17 +553,16 @@
                 <input type="hidden" name="next" value="/">
                 <button type="submit">追加</button>
             </form></div>
-        <hr>
-        
+        </div><div>
+            <hr>
             <!-- 期限切れ -->
-            {% for t in overdue %}
-                <h2>⚠ 期限切れ</h2>
+            <h2>⚠ 期限切れ</h2>
                 <ul>
-                    {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+                    {% for t in overdue %}
                     {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red") }}
+                    {% endfor %}
                 </ul>
                 <hr>
-            {% endfor %}
             <!-- 今日 -->
             <h2>今日のタスク</h2>
             <ul>
@@ -586,6 +586,7 @@
             </ul>
             <hr>
             <!-- 完了済み -->
+             <!--
             <h3>完了済み</h3>
             <ul>
                 {% for t in tasks_done %}
@@ -595,6 +596,7 @@
                     </li>
                 {% endfor %}
             </ul>
+        -->
         </div>
     </body>
 </html>
