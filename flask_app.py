@@ -5,6 +5,8 @@ import os
 import re
 import requests
 import csv
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 
 # ===== 全角→半角クォート正規化 =====
@@ -234,6 +236,7 @@ def init_db():
             sync_key TEXT,
             source_type TEXT,
             source_updated_at TEXT,
+            source_url TEXT,
             archived INTEGER DEFAULT 0
         )
         """
@@ -251,6 +254,8 @@ def init_db():
         c.execute("ALTER TABLE tasks ADD COLUMN source_type TEXT")
     if "source_updated_at" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN source_updated_at TEXT")
+    if "source_url" not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN source_url TEXT")
     if "archived" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0")
 
@@ -262,6 +267,7 @@ def init_db():
             content TEXT,
             project_id INTEGER,
             student_id INTEGER,
+            task_id INTEGER,
             scrapbox_url TEXT,
             created_at TEXT
         )
@@ -273,6 +279,8 @@ def init_db():
     note_columns = [col[1] for col in c.fetchall()]
     if "student_id" not in note_columns:
         c.execute("ALTER TABLE notes ADD COLUMN student_id INTEGER")
+    if "task_id" not in note_columns:
+        c.execute("ALTER TABLE notes ADD COLUMN task_id INTEGER")
 
     c.execute(
         """
@@ -588,6 +596,34 @@ def home():
     tasks_todo_anytime = classified["anytime_tasks"]
     tasks_done = classified["done_tasks"]
 
+    months = max(0, min(request.args.get("months", 3, type=int), 12))
+
+    today_date = datetime.strptime(today_str, "%Y-%m-%d").date()
+
+    if months == 0:
+        # 月末まで（今月フィルタ）
+        next_month = today_date + relativedelta(months=1, day=1)
+        limit_date = next_month - relativedelta(days=1)
+    else:
+        # Nヶ月先（従来通り）
+        limit_date = today_date + relativedelta(months=months)
+
+    filtered_tasks_todo = []
+    for t in tasks_todo:
+        d = t.get("deadline")
+        if not d:
+            continue
+        if isinstance(d, str):
+            try:
+                # Try full ISO format first (e.g., 2026-04-23T09:00:00)
+                d = datetime.fromisoformat(d).date()
+            except ValueError:
+                # Fallback to date-only format
+                d = datetime.strptime(d.split("T")[0], "%Y-%m-%d").date()
+        if today_date < d <= limit_date:
+            filtered_tasks_todo.append(t)
+
+    tasks_todo = filtered_tasks_todo
     projects = fetch_all_projects(c)
     conn.close()
 
@@ -601,6 +637,7 @@ def home():
         tasks_todo_anytime=tasks_todo_anytime,
         is_production=os.getenv("IS_PRODUCTION") == "1",
         students=STUDENTS_DATA,
+        months=months,
     )
 
 
@@ -994,13 +1031,52 @@ def project_detail(project_id):
     # ★ ノート取得
     notes = c.execute(
         """
-        SELECT id, title, content, scrapbox_url, created_at
+        SELECT id, title, content, scrapbox_url, created_at, task_id
         FROM notes
         WHERE project_id=?
         ORDER BY created_at DESC
     """,
         (project_id,),
     ).fetchall()
+
+    notes_by_task_id = {}
+    unlinked_notes = []
+    for n in notes:
+        nd = dict(n)
+        task_id = nd.get("task_id")
+        if task_id:
+            notes_by_task_id.setdefault(task_id, []).append(nd)
+        else:
+            unlinked_notes.append(nd)
+
+    all_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in all_tasks
+    ]
+    overdue_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in overdue_tasks
+    ]
+    today_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in today_tasks
+    ]
+    future_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in future_tasks
+    ]
+    anytime_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in anytime_tasks
+    ]
+    done_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in done_tasks
+    ]
+    archived_tasks = [
+        {**dict(t), "related_notes": notes_by_task_id.get(dict(t)["task_id"], [])}
+        for t in archived_tasks
+    ]
 
     conn.close()
 
@@ -1015,6 +1091,7 @@ def project_detail(project_id):
         done_tasks=done_tasks,
         archived_tasks=archived_tasks,
         notes=notes,
+        unlinked_notes=unlinked_notes,
         history=history,
         students=STUDENTS_DATA,
     )
@@ -1026,6 +1103,7 @@ def add_note():
     content = request.form["content"]
     project_id = request.form["project_id"]
     student_id = request.form.get("student_id")
+    task_id = request.form.get("task_id") or None
     scrapbox_url = request.form["scrapbox_url"]
 
     conn = get_db()
@@ -1033,10 +1111,10 @@ def add_note():
 
     c.execute(
         """
-            INSERT INTO notes (title, content, project_id, student_id, scrapbox_url, created_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            INSERT INTO notes (title, content, project_id, student_id, task_id, scrapbox_url, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
         """,
-        (title, content, project_id, student_id, scrapbox_url),
+        (title, content, project_id, student_id, task_id, scrapbox_url),
     )
 
     conn.commit()
@@ -1529,6 +1607,7 @@ SYNC_FIELDS = [
     "archived",
     "source_type",
     "source_updated_at",
+    "source_url",
 ]
 
 
@@ -1548,6 +1627,7 @@ def normalize_sync_item(item, cursor):
         "archived": int(item.get("archived", 0)),
         "source_type": item.get("source_type", "manual_json"),
         "source_updated_at": item.get("source_updated_at"),
+        "source_url": item.get("source_url"),
     }
 
 
@@ -1632,9 +1712,9 @@ def create_task_from_sync(cursor, normalized):
         """
         INSERT INTO tasks (
             title, status, deadline, original_deadline, project_id, student_id,
-            priority, sync_key, source_type, source_updated_at, archived
+            priority, sync_key, source_type, source_updated_at, source_url, archived
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             normalized["title"],
@@ -1647,6 +1727,7 @@ def create_task_from_sync(cursor, normalized):
             normalized["sync_key"],
             normalized["source_type"],
             normalized["source_updated_at"],
+            normalized.get("source_url"),
             normalized["archived"],
         ),
     )
@@ -1746,7 +1827,7 @@ def build_sync_diff(imported_items, cursor):
     for source_type in source_types:
         if source_type == "chatgpt_memory":
             continue
-        
+
         existing_rows = cursor.execute(
             """
             SELECT id, sync_key
@@ -2223,6 +2304,7 @@ def edit_task_title():
 
     next_url = request.form.get("next")
     return redirect(next_url or "/")
+
 
 if __name__ == "__main__":
     init_db()

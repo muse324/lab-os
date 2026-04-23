@@ -575,7 +575,55 @@
             {# グローバル: プロジェクト別色分け用マップ #}
             {% set ns = namespace(color_map={}) %}
             {% set colors = ['#4caf50','#2196f3','#ff9800','#9c27b0','#f44336','#009688'] %}
-            <h2>今後の締切（プロジェクト別）</h2>
+            <h2>
+              今後の締切（プロジェクト別）
+              <br>
+              <span id="monthFilter" style="font-size:0.8em;">
+                  表示範囲：
+                  <a href="/?months=0" data-months="0"></a> /
+                  <a href="/?months=1" data-months="1"></a> /
+                  <a href="/?months=2" data-months="2"></a> /
+                  <a href="/?months=3" data-months="3"></a> /
+                  <a href="/?months=6" data-months="6"></a> /
+                  <a href="/?months=9" data-months="9"></a> /
+                  <a href="/?months=12" data-months="12"></a>
+              </span>
+
+              <script>
+              (function(){
+                  const now = new Date();
+                  const currentMonth = now.getMonth() + 1;
+
+                  const params = new URLSearchParams(window.location.search);
+                  const selected = parseInt(params.get("months") ?? "3", 10);
+
+                  const container = document.getElementById("monthFilter");
+                  const links = container.querySelectorAll("a[data-months]");
+
+                  links.forEach(link => {
+                      const m = parseInt(link.dataset.months, 10);
+                      const displayMonth = ((currentMonth - 1 + m) % 12) + 1;
+
+                      let label;
+                      if (m === 0) label = `今月(${displayMonth}月)`;
+                      else if (m === 1) label = `来月(${displayMonth}月)`;
+                      else label = `〜${displayMonth}月`;
+
+                      if (m === selected) {
+                          const span = document.createElement("span");
+                          span.textContent = label;
+                          span.style.fontWeight = "bold";
+                          span.style.background = "#eee";
+                          span.style.padding = "2px 6px";
+                          span.style.borderRadius = "4px";
+                          link.replaceWith(span);
+                      } else {
+                          link.textContent = label;
+                      }
+                  });
+              })();
+              </script>
+            </h2>
             {% for project, items in tasks_todo|groupby("project_name") %}
                 {% if project not in ns.color_map %}
                     {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}

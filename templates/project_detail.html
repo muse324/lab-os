@@ -8,7 +8,7 @@
     <script src="/static/js/student-modules.js"></script>
 </head>
 <body>
-     <script>
+    <script>
         // --- スクロール位置保存 ---
         window.addEventListener("beforeunload", () => {
             localStorage.setItem("scrollY", window.scrollY);
@@ -31,6 +31,30 @@
                 StudentTooltipModule.bind(document);
             }
         });
+
+        function openNoteFormForTask(taskId, taskTitle) {
+            const taskSelect = document.querySelector('select[name="task_id"]');
+            const titleInput = document.querySelector('form[action="/add_note"] input[name="title"]');
+            const contentInput = document.querySelector('form[action="/add_note"] textarea[name="content"]');
+            const scrapboxInput = document.querySelector('form[action="/add_note"] input[name="scrapbox_url"]');
+
+            if (taskSelect) {
+                taskSelect.value = String(taskId);
+            }
+            if (titleInput && !titleInput.value) {
+                titleInput.value = `【${taskTitle}】`;
+            }
+            if (contentInput && !contentInput.value) {
+                contentInput.focus();
+            } else if (scrapboxInput) {
+                scrapboxInput.focus();
+            }
+
+            const noteHeading = Array.from(document.querySelectorAll('h3')).find(el => el.textContent.includes('メモ追加'));
+            if (noteHeading) {
+                noteHeading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
     </script>
     {% from "components/task_item.html" import edit_form, task_actions %}
 
@@ -63,6 +87,8 @@
     <li class="task-title-scope" style="color:red;">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ edit_form(t["task_id"], t["title"]) }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["source_url"] %}<a href="{{ t["source_url"] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif %}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         {% if t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
@@ -82,6 +108,19 @@
             </label>
             <button type="submit">更新</button>
         </form>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -92,6 +131,8 @@
     <li class="task-title-scope" style="color:orange;">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ edit_form(t["task_id"], t["title"]) }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["source_url"] %}<a href="{{ t["source_url"] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif %}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         <form action="/done/{{ t["task_id"] }}" method="post" style="display:inline; margin-left:4px">
@@ -108,6 +149,19 @@
             </label>
             <button type="submit">更新</button>
         </form>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -118,6 +172,20 @@
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -128,6 +196,20 @@
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -138,6 +220,20 @@
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -148,9 +244,24 @@
     <li class="task-title-scope" style="color:#888;">
         {% if t["priority"] == "high" %}🔥{% endif %}
         {{ edit_form(t["task_id"], t["title"], t["status"] == "done") }}
+        <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
+        {% if t["source_url"] %}<a href="{{ t["source_url"] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif %}
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         <small>（{{ t["archive_reason"] }}）</small>
+        {% if t["related_notes"] %}
+            <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+                関連ノート:
+                {% for n in t["related_notes"] %}
+                    {% if n["scrapbox_url"] %}
+                        <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                    {% else %}
+                        <span>📝 {{ n["title"] }}</span>
+                    {% endif %}
+                    {% if not loop.last %} / {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
     </li>
 {% endfor %}
 </ul>
@@ -173,60 +284,66 @@
 
 <hr>
 
-<h2>メモ一覧</h2>
+
+<hr>
+
+<h2>📝 ノート（タスクベース）</h2>
+
+<h3>タスクに紐づいたノート</h3>
+
+{% for t in tasks %}
+    {% if t["related_notes"] %}
+        <div style="margin-bottom:16px; padding:10px; border:1px solid #ddd; border-radius:6px; background:#fafafa;">
+            <div style="font-weight:bold; margin-bottom:6px;">
+                📌 {{ t["title"] }}
+                <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}" style="font-size:0.8em; margin-left:8px;">[ジャンプ]</a>
+            </div>
+
+            <ul style="margin:0; padding-left:16px;">
+                {% for n in t["related_notes"] %}
+                    <li class="note-title-scope" style="margin-bottom:4px;">
+                        {% if n["scrapbox_url"] %}
+                            <a href="{{ n["scrapbox_url"] }}" target="_blank">📝 {{ n["title"] }}</a>
+                        {% else %}
+                            📝 {{ n["title"] }}
+                        {% endif %}
+                        <small style="color:#666; margin-left:6px;">{{ n["created_at"] }}</small>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+{% endfor %}
+
+<h3>未整理ノート（タスク未紐付け）</h3>
+
+{% if unlinked_notes %}
+    <ul>
+    {% for n in unlinked_notes %}
+        <li class="note-title-scope">
+            <b>{{ n["title"] }}</b><br>
+            {{ n["content"] }}<br>
+
+            {% if n["scrapbox_url"] %}
+                <a href="{{ n["scrapbox_url"] }}" target="_blank">開く</a>
+            {% else %}
+                <a href="https://scrapbox.io/musestudio/{{ n["title"] }}" target="_blank">
+                    Scrapbox作成
+                </a>
+            {% endif %}
+
+            <br>
+            <small>{{ n["created_at"] }}</small>
+        </li>
+    {% endfor %}
+    </ul>
+{% else %}
+    <p style="color:#888;">未整理ノートはありません</p>
+{% endif %}
+
+<hr>
 
 <h3>メモ追加</h3>
-
-<form action="/add_note" method="post">
-    <input name="title" placeholder="タイトル"><br>
-
-    <textarea name="content" placeholder="内容"></textarea><br>
-
-    <input name="scrapbox_url" placeholder="Scrapbox URL"><br>
-
-    <input type="hidden" name="project_id" value="{{ project["id"] }}">
-    <input type="hidden" name="student_id" value="{{ request.args.get('student_id', '') }}">
-    <button type="submit">保存</button>
-
-    <!-- Scrapbox生成 -->
-    <button type="button" onclick="
-        const title = document.getElementsByName('title')[0].value;
-        if(title){
-            window.open(
-                'https://scrapbox.io/あなたのプロジェクト名/' + encodeURIComponent(title),
-                '_blank'
-            );
-        } else {
-            alert('タイトルを入力してください');
-        }
-    ">
-        Scrapbox作成
-    </button>
-</form>
-
-<hr>
-
-<ul>
-{% for n in notes %}
-    <li class="note-title-scope">
-        <b>{{ n["title"] }}</b><br>
-        {{ n["content"] }}<br>
-
-        {% if n["scrapbox_url"] %}
-            <a href="{{ n["scrapbox_url"] }}">開く</a>
-        {% else %}
-            <a href="https://scrapbox.io/musestudio/{{ n["title"] }}" target="_blank">
-                Scrapbox作成
-            </a>
-        {% endif %}
-
-        <br>
-        <small>{{ n["created_at"] }}</small>
-    </li>
-{% endfor %}
-</ul>
-
-<hr>
 
 <a href="/projects">← Projects</a><br>
 <a href="/">← Dashboard</a>

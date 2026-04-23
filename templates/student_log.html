@@ -13,7 +13,7 @@
         {% for t in tasks %}
         <li>
             {% if t["priority"] == "high" %}🔥{% endif %}
-            {{ t["title"] }}
+            {{ t["title"] }}{% if t["source_url"] %}<a href="{{ t["source_url"] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif %}
             （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
             {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
             {% if t["status"] == "done" %}[完了]{% endif %}
