@@ -572,18 +572,39 @@
             </ul>
             <hr>
             <!-- その他 -->
-            <h2>今後の〆切</h2>
-            <ul>
-                {% for t in tasks_todo %}
-                    {{ render_task_item(t, show_deadline=true, allow_update=false) }}
-                {% endfor %}
-            </ul>
-            <h2>いつでも</h2>
-            <ul>
-                {% for t in tasks_todo_anytime %}
-                    {{ render_task_item(t, show_deadline=true, allow_update=true) }}
-                {% endfor %}
-            </ul>
+            {# グローバル: プロジェクト別色分け用マップ #}
+            {% set ns = namespace(color_map={}) %}
+            {% set colors = ['#4caf50','#2196f3','#ff9800','#9c27b0','#f44336','#009688'] %}
+            <h2>今後の締切（プロジェクト別）</h2>
+            {% for project, items in tasks_todo|groupby("project_name") %}
+                {% if project not in ns.color_map %}
+                    {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
+                {% endif %}
+                {% set color = ns.color_map[project] %}
+                <div style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;">
+                    <strong style="color: {{ color }}">{{ project or "未分類" }}</strong>
+                </div>
+                <ul>
+                    {% for t in items %}
+                        {{ render_task_item(t, show_deadline=true, allow_update=false) }}
+                    {% endfor %}
+                </ul>
+            {% endfor %}
+            <h2>いつでも（プロジェクト別）</h2>
+            {% for project, items in tasks_todo_anytime|groupby("project_name") %}
+                {% if project not in ns.color_map %}
+                    {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
+                {% endif %}
+                {% set color = ns.color_map[project] %}
+                <div style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;">
+                    <strong style="color: {{ color }}">{{ project or "未分類" }}</strong>
+                </div>
+                <ul>
+                    {% for t in items %}
+                        {{ render_task_item(t, show_deadline=true, allow_update=true) }}
+                    {% endfor %}
+                </ul>
+            {% endfor %}
             <hr>
             <!-- 完了済み -->
              <!--
