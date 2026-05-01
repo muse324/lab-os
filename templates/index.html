@@ -20,6 +20,13 @@
         <button type="button" onclick="exportMemo()" title="現在の全タスクをメモとして出力（再生成・整理用）">📄 全タスクをメモ化</button>
         <button type="button" onclick="exportDelta()" title="前回からの変更分のみをメモとして出力（更新反映用）">🔄 変更分だけメモ化</button>
         <button type="button" onclick="exportDeltaJson()" title="変更分をJSONで出力（構造確認・機械処理用）">🧩 変更分をJSON化</button>
+        <select id="snapshotProject">
+            <option value="__all__">全体状態（プロジェクト横断）</option>
+            {% for p in projects %}
+                <option value="{{ p[1] }}">{{ p[1] }}</option>
+            {% endfor %}
+        </select>
+        <button type="button" onclick="copySnapshot()">Snapshotコピー</button>
         <select onchange="window.syncHistoryFilterField=this.value||null">
             <option value="">全フィールド</option>
             <option value="title">title</option>
@@ -61,7 +68,56 @@
                         padding:10px;
                         white-space:pre-wrap"></div>
             <script>
-            // --- スクロール位置保存 ---
+            // ===== Module Namespaces (準備段階: ファイル分離前) =====
+            const SyncModule = {};
+            const ExportModule = {};
+            const RenderModule = {};
+            const ApiModule = {};
+
+            // ===== API層 =====
+            ApiModule.get = async function(url) {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(await res.text());
+                return res;
+            };
+
+            ApiModule.postForm = async function(url, data) {
+                const body = Object.entries(data)
+                    .map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+                    .join("&");
+                const res = await fetch(url, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
+                    body
+                });
+                if (!res.ok) throw new Error(await res.text());
+                return res;
+            };
+
+            // ===== Snapshot / Export系 =====
+            ExportModule.copySnapshot = async function() {
+                const project = document.getElementById("snapshotProject").value;
+                if (!project) return;
+
+                const url = project === "__all__"
+                    ? "/export_snapshot_scrapbox_all"
+                    : `/export_snapshot_scrapbox/${encodeURIComponent(project)}`;
+
+                try {
+                    const res = await ApiModule.get(url);
+                    if (!res.ok) {
+                        throw new Error(await res.text());
+                    }
+                    const text = await res.text();
+
+                    await navigator.clipboard.writeText(text);
+
+                    alert("Snapshotをコピーしました");
+                } catch (e) {
+                    alert("コピー失敗: " + e);
+                }
+            }
+            // ===== UI状態保持 =====
             window.addEventListener("beforeunload", () => {
                 localStorage.setItem("scrollY", window.scrollY);
             });
@@ -83,6 +139,7 @@
                     StudentTooltipModule.bind(document);
                 }
             });
+            // ===== インライン編集 =====
             function toggleInlineEdit(button) {
                 const form = button.closest(".inline-edit-form");
                 if (!form) return;
@@ -104,7 +161,10 @@
                     form.submit();
                 }
             }
-            function fieldLabel(field) {
+            // ===== Utilsモジュール（純関数群） =====
+            const UtilsModule = {};
+
+            UtilsModule.fieldLabel = function(field) {
                 const labels = {
                     title: "タイトル (title)",
                     deadline: "締切 (deadline)",
@@ -117,36 +177,24 @@
                     source_updated_at: "元データ更新時刻 (source_updated_at)"
                 };
                 return labels[field] || field;
-            }
+            };
 
-            function formatValue(value) {
+            UtilsModule.formatValue = function(value) {
                 if (value === null || value === undefined || value === "") {
                     return "未設定";
                 }
-                if (value === 0 || value === "0") {
-                    return "いいえ";
-                }
-                if (value === 1 || value === "1") {
-                    return "はい";
-                }
-                if (value === "todo") {
-                    return "未完了";
-                }
-                if (value === "done") {
-                    return "完了";
-                }
-                if (value === "high") {
-                    return "重要";
-                }
-                if (value === "medium") {
-                    return "通常";
-                }
+                if (value === 0 || value === "0") return "いいえ";
+                if (value === 1 || value === "1") return "はい";
+                if (value === "todo") return "未完了";
+                if (value === "done") return "完了";
+                if (value === "high") return "重要";
+                if (value === "medium") return "通常";
                 return String(value);
-            }
+            };
 
-            function renderSyncResult(data, mode) {
+            // ===== 純関数: 同期結果テキスト生成 =====
+            function buildSummary(data, mode) {
                 const lines = [];
-
                 if (mode === "preview") {
                     lines.push("差分確認結果");
                     lines.push("------------------------------");
@@ -162,107 +210,105 @@
                     lines.push(`アーカイブ: ${data.archived}件`);
                     lines.push(`変更なし: ${data.unchanged}件`);
                 }
+                return lines;
+            }
 
-                if (data.errors && data.errors.length > 0) {
-                    lines.push("");
-                    lines.push("エラー:");
-                    data.errors.forEach((err, i) => {
-                        lines.push(`  ${i + 1}. ${err.reason}`);
-                    });
-                }
+            function buildDetails(data) {
+                const lines = [];
+                if (!data.details) return lines;
 
-                if (mode === "preview" && data.details) {
-                    if (data.details.create && data.details.create.length > 0) {
-                        lines.push("");
-                        lines.push("追加予定:");
+                if (data.details.create?.length) {
+                    lines.push("", "追加予定:");
                     data.details.create.forEach((item, i) => {
                         lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
-                        lines.push(`     プロジェクト: ${formatValue(item.project_name)}`);
-                        lines.push(`     締切: ${formatValue(item.deadline)}`);
-                        lines.push(`     優先度: ${formatValue(item.priority)}`);
-                        lines.push(`     状態: ${formatValue(item.status)}`);
-                        lines.push(`     同期キー: ${formatValue(item.sync_key)}`);
+                        lines.push(`     プロジェクト: ${UtilsModule.formatValue(item.project_name)}`);
+                        lines.push(`     締切: ${UtilsModule.formatValue(item.deadline)}`);
+                        lines.push(`     優先度: ${UtilsModule.formatValue(item.priority)}`);
+                        lines.push(`     状態: ${UtilsModule.formatValue(item.status)}`);
+                        lines.push(`     同期キー: ${UtilsModule.formatValue(item.sync_key)}`);
                     });
-                    }
-
-                    if (data.details.update && data.details.update.length > 0) {
-                        lines.push("");
-                        lines.push("更新予定:");
-                        data.details.update.forEach((item, i) => {
-                            lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
-                            lines.push(`     同期キー: ${item.sync_key}`);
-                            item.changes.forEach((change) => {
-                                lines.push(
-                                    `     ${fieldLabel(change.field)}: ${formatValue(change.old)} → ${formatValue(change.new)}`
-                                );
-                            });
-                        });
-                    }
-
-                    if (data.details.archive && data.details.archive.length > 0) {
-                        lines.push("");
-                        lines.push("アーカイブ予定:");
-                        data.details.archive.forEach((item, i) => {
-                            lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
-                            lines.push(`     同期キー: ${item.sync_key}`);
-
-                            if (item.source_type === "chatgpt_memory") {
-                                lines.push(`     理由: 同期差分によりアーカイブ（chatgpt_memoryは参照しない）`);
-                            } else if (item.source_type && item.source_type !== "manual_json") {
-                                lines.push(`     理由: ${item.source_type}に存在しないためアーカイブ`);
-                            } else {
-                                lines.push(`     理由: インポートJSONに存在しないためアーカイブ`);
-                            }
-
-                            lines.push(`     比較元: ${item.comparison_basis || "前回同期 vs 現在"}`);
-
-                            if (item.snapshot_found) {
-                                lines.push(`     前回同期スナップショット: あり`);
-                                if (item.snapshot_title) {
-                                    lines.push(`     前回タイトル: ${item.snapshot_title}`);
-                                }
-                                if (item.snapshot_updated_at) {
-                                    lines.push(`     前回同期時刻: ${item.snapshot_updated_at}`);
-                                }
-                            } else {
-                                lines.push(`     前回同期スナップショット: なし`);
-                            }
-
-                            lines.push(`     削除方式: ${item.is_soft_delete ? "soft delete（復活可能）" : "hard delete"}`);
-                            lines.push(`     復活可否: ${item.revivable ? "はい" : "いいえ"}`);
-                        });
-                    }
                 }
-                if (mode === "apply" && data.sync_history) {
-                    const updatedIds = new Set(data.updated_task_ids || []);
 
-                    const filtered = data.sync_history.filter(h =>
-                        updatedIds.has(h.task_id)
-                    );
-
-                    if (filtered.length > 0) {
-                        lines.push("");
-                        lines.push("変更ログ（今回反映分）:");
-
-                        filtered.forEach((h, i) => {
-                            lines.push(`  ${i + 1}. task_id=${h.task_id}`);
-                            lines.push(`     ${fieldLabel(h.field_name)}: ${formatValue(h.old_value)} → ${formatValue(h.new_value)}`);
-                            lines.push(`     同期元: ${h.source_type}`);
-                            lines.push(`     時刻: ${h.changed_at}`);
+                if (data.details.update?.length) {
+                    lines.push("", "更新予定:");
+                    data.details.update.forEach((item, i) => {
+                        lines.push(`  ${i + 1}. ${item.title || "（無題）"}`);
+                        lines.push(`     同期キー: ${item.sync_key}`);
+                        item.changes.forEach(change => {
+                            lines.push(`     ${UtilsModule.fieldLabel(change.field)}: ${UtilsModule.formatValue(change.old)} → ${UtilsModule.formatValue(change.new)}`);
                         });
+                    });
+                }
+
+                return lines;
+            }
+
+            function buildHistory(data) {
+                const lines = [];
+                if (!data.sync_history) return lines;
+
+                const updatedIds = new Set(data.updated_task_ids || []);
+                const filtered = data.sync_history.filter(h => updatedIds.has(h.task_id));
+
+                if (filtered.length) {
+                    lines.push("", "変更ログ（今回反映分）:");
+                    filtered.forEach((h, i) => {
+                        lines.push(`  ${i + 1}. task_id=${h.task_id}`);
+                        lines.push(`     ${UtilsModule.fieldLabel(h.field_name)}: ${UtilsModule.formatValue(h.old_value)} → ${UtilsModule.formatValue(h.new_value)}`);
+                        lines.push(`     同期元: ${h.source_type}`);
+                        lines.push(`     時刻: ${h.changed_at}`);
+                    });
+                }
+                return lines;
+            }
+
+            function buildSyncResultHTML(data, mode) {
+                let html = "";
+
+                const summary = buildSummary(data, mode);
+                html += "<div><strong>" + summary[0] + "</strong></div>";
+                html += "<ul>";
+                for (let i = 2; i < summary.length; i++) {
+                    html += "<li>" + summary[i] + "</li>";
+                }
+                html += "</ul>";
+
+                if (data.errors?.length) {
+                    html += "<div style='color:red'><strong>エラー</strong><ul>";
+                    data.errors.forEach(err => {
+                        html += "<li>" + err.reason + "</li>";
+                    });
+                    html += "</ul></div>";
+                }
+
+                if (mode === "preview") {
+                    const details = buildDetails(data);
+                    if (details.length) {
+                        html += "<pre>" + details.join("\n") + "</pre>";
                     }
                 }
 
-                document.getElementById("syncResult").textContent = lines.join("\n");
+                if (mode === "apply") {
+                    const history = buildHistory(data);
+                    if (history.length) {
+                        html += "<pre>" + history.join("\n") + "</pre>";
+                    }
+                }
+
+                return html;
+            }
+
+            // ===== 同期結果表示 =====
+            RenderModule.renderSyncResult = function(data, mode) {
+                const html = buildSyncResultHTML(data, mode);
+                const el = document.getElementById("syncResult");
+                el.innerHTML = html;
             }
             
-            async function generateSyncJson() {
+            // ===== 同期（生成・プレビュー・適用） =====
+            SyncModule.generateSyncJson = async function() {
                 const memo = document.getElementById("memoInput").value;
-                const res = await fetch("/generate_sync_json", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
-                    body: "memo=" + encodeURIComponent(memo)
-                });
+                const res = await ApiModule.postForm("/generate_sync_json", { memo });
                 const data = await res.json();
 
                 if (data.error) {
@@ -274,23 +320,20 @@
                 document.getElementById("syncResult").textContent = `JSON生成完了: ${data.tasks.length}件（ローカル解析）`;
             }
 
-            async function previewSync() {
+            SyncModule.previewSync = async function() {
                 const json = document.getElementById("jsonInput").value;
-                const res = await fetch("/sync_preview", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
-                    body: "json=" + encodeURIComponent(json)
-                });
+                const res = await ApiModule.postForm("/sync_preview", { json });
                 const data = await res.json();
-                renderSyncResult(data, "preview");
+                RenderModule.renderSyncResult(data, "preview");
             }
 
-            async function refreshUpdatedTasks(taskIds) {
+            // ===== DOM更新（差分反映） =====
+            RenderModule.refreshUpdatedTasks = async function(taskIds) {
                 if (!taskIds || taskIds.length === 0) {
                     return;
                 }
 
-                const res = await fetch("/");
+                const res = await ApiModule.get("/");
                 const html = await res.text();
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, "text/html");
@@ -303,12 +346,12 @@
                         current.replaceWith(fresh);
                         StudentLinkModule.linkStudentNames(fresh);
                         StudentTooltipModule.bind(fresh);
-                        markTaskUpdated(taskId);
+                        RenderModule.markTaskUpdated(taskId);
                     }
                 });
             }
 
-            function markTaskUpdated(taskId) {
+            RenderModule.markTaskUpdated = function(taskId) {
                 const li = document.querySelector(`[data-task-id="${taskId}"]`);
                 if (!li) return;
 
@@ -333,19 +376,15 @@
                 li.appendChild(badge);
             }
 
-            async function applySync() {
+            SyncModule.applySync = async function() {
                 const json = document.getElementById("jsonInput").value;
-                const res = await fetch("/sync_apply", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/x-www-form-urlencoded"},
-                    body: "json=" + encodeURIComponent(json)
-                });
+                const res = await ApiModule.postForm("/sync_apply", { json });
                 const data = await res.json();
-                renderSyncResult(data, "apply");
-                await refreshUpdatedTasks(data.updated_task_ids || []);
+                RenderModule.renderSyncResult(data, "apply");
+                await RenderModule.refreshUpdatedTasks(data.updated_task_ids || []);
             }
 
-            async function importTasks() {
+            SyncModule.importTasks = async function() {
                 const json = document.getElementById("jsonInput").value;
                 const form = document.createElement("form");
                 form.method = "POST";
@@ -360,7 +399,7 @@
                 document.body.appendChild(form);
                 form.submit();
             }
-            // --- デプロイ実行 ---
+            // ===== デプロイ =====
             async function runDeploy(event) {
                 event.preventDefault();
 
@@ -375,9 +414,7 @@
                 const start = Date.now();
 
                 try {
-                    const res = await fetch("/deploy", {
-                        method: "POST"
-                    });
+                    const res = await ApiModule.postForm("/deploy", {});
 
                     const text = await res.text();
 
@@ -408,8 +445,9 @@
                     button.disabled = false;
                 }
             }
-            async function exportMemo() {
-                const res = await fetch("/export_tasks_as_memo");
+            // ===== GPT用エクスポート =====
+            ExportModule.exportMemo = async function() {
+                const res = await ApiModule.get("/export_tasks_as_memo");
                 const data = await res.json();
 
                 const prompt = buildFullMemoPrompt();
@@ -417,8 +455,8 @@
                 document.getElementById("memoInput").value =
                     prompt + "\n\n" + data.memo;
             }
-            async function exportDelta() {
-                const res = await fetch("/export_delta_for_gpt");
+            ExportModule.exportDelta = async function() {
+                const res = await ApiModule.get("/export_delta_for_gpt");
                 const data = await res.json();
 
                 const prompt = buildDeltaPrompt();
@@ -427,8 +465,8 @@
                 document.getElementById("memoInput").value =
                     prompt + "\n\n" + body;
             }
-            async function exportDeltaJson() {
-                const res = await fetch("/export_delta_for_gpt");
+            ExportModule.exportDeltaJson = async function() {
+                const res = await ApiModule.get("/export_delta_for_gpt");
                 const data = await res.json();
 
                 const prompt = buildDeltaJsonPrompt();
@@ -437,6 +475,7 @@
                 document.getElementById("memoInput").value =
                     prompt + "\n\n" + body;
             }
+            // ===== GPTプロンプト生成 =====
             function buildFullMemoPrompt() {
                 return [
                     "以下は現在のタスク一覧です。【ChatGPTにはこのまま投げないように!】",
@@ -475,6 +514,7 @@
                     "出力は、更新後のタスク一覧を簡潔に整理した形式で提示してください。"
                 ].join("\n");
             }
+            // ===== 差分フォーマット =====
             function formatDeltaForGPT(delta) {
                 let lines = [];
 
@@ -487,11 +527,11 @@
                     added.forEach(t => {
                         const title = t.title || "（無題）";
                         lines.push(`- ${title} [sync_key: ${t.sync_key || "unknown"}]`);
-                        lines.push(`    ${fieldLabel("deadline")}: ${formatValue(t.deadline)}`);
-                        lines.push(`    ${fieldLabel("priority")}: ${formatValue(t.priority)}`);
-                        lines.push(`    ${fieldLabel("status")}: ${formatValue(t.status)}`);
-                        lines.push(`    ${fieldLabel("project_id")}: ${formatValue(t.project_id)}`);
-                        lines.push(`    ${fieldLabel("student_id")}: ${formatValue(t.student_id)}`);
+                        lines.push(`    ${UtilsModule.fieldLabel("deadline")}: ${UtilsModule.formatValue(t.deadline)}`);
+                        lines.push(`    ${UtilsModule.fieldLabel("priority")}: ${UtilsModule.formatValue(t.priority)}`);
+                        lines.push(`    ${UtilsModule.fieldLabel("status")}: ${UtilsModule.formatValue(t.status)}`);
+                        lines.push(`    ${UtilsModule.fieldLabel("project_id")}: ${UtilsModule.formatValue(t.project_id)}`);
+                        lines.push(`    ${UtilsModule.fieldLabel("student_id")}: ${UtilsModule.formatValue(t.student_id)}`);
                     });
                 }
 
@@ -504,7 +544,7 @@
                         if (t.changes && t.changes.length) {
                             t.changes.forEach(change => {
                                 lines.push(
-                                    `    ${fieldLabel(change.field)}: ${formatValue(change.old)} → ${formatValue(change.new)}`
+                                    `    ${UtilsModule.fieldLabel(change.field)}: ${UtilsModule.formatValue(change.old)} → ${UtilsModule.formatValue(change.new)}`
                                 );
                             });
                         }
@@ -518,17 +558,26 @@
                         const syncKey = (typeof t === "string") ? t : (t.sync_key || "unknown");
                         lines.push(`- ${title} [sync_key: ${syncKey}]`);
                         if (typeof t !== "string") {
-                            lines.push(`    ${fieldLabel("deadline")}: ${formatValue(t.deadline)}`);
-                            lines.push(`    ${fieldLabel("priority")}: ${formatValue(t.priority)}`);
-                            lines.push(`    ${fieldLabel("status")}: ${formatValue(t.status)}`);
-                            lines.push(`    ${fieldLabel("project_id")}: ${formatValue(t.project_id)}`);
-                            lines.push(`    ${fieldLabel("student_id")}: ${formatValue(t.student_id)}`);
+                            lines.push(`    ${UtilsModule.fieldLabel("deadline")}: ${UtilsModule.formatValue(t.deadline)}`);
+                            lines.push(`    ${UtilsModule.fieldLabel("priority")}: ${UtilsModule.formatValue(t.priority)}`);
+                            lines.push(`    ${UtilsModule.fieldLabel("status")}: ${UtilsModule.formatValue(t.status)}`);
+                            lines.push(`    ${UtilsModule.fieldLabel("project_id")}: ${UtilsModule.formatValue(t.project_id)}`);
+                            lines.push(`    ${UtilsModule.fieldLabel("student_id")}: ${UtilsModule.formatValue(t.student_id)}`);
                         }
                     });
                 }
 
                 return lines.join("\n");
             }
+            // ===== backward compatibility (global exposure) =====
+            window.copySnapshot = ExportModule.copySnapshot;
+            window.generateSyncJson = SyncModule.generateSyncJson;
+            window.previewSync = SyncModule.previewSync;
+            window.applySync = SyncModule.applySync;
+            window.importTasks = SyncModule.importTasks;
+            window.exportMemo = ExportModule.exportMemo;
+            window.exportDelta = ExportModule.exportDelta;
+            window.exportDeltaJson = ExportModule.exportDeltaJson;
             </script>
             
             <!-- クイック入力 -->
