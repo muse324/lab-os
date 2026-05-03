@@ -113,7 +113,6 @@ const StudentLinkModule = (() => {
 const StudentTooltipModule = (() => {
     let tooltip;
     let abortController = null;
-    const cache = new Map();
 
     function ensureTooltip() {
         if (tooltip) return tooltip;
@@ -161,16 +160,10 @@ const StudentTooltipModule = (() => {
         const name = link.dataset.studentName;
         const studentId = link.dataset.studentId;
         if (!name && !studentId) return;
-        const cacheKey = studentId || name;
 
         positionTooltip(event);
         tip.style.display = "block";
         tip.innerHTML = "読込中...";
-
-        if (cache.has(cacheKey)) {
-            tip.innerHTML = render(cache.get(cacheKey));
-            return;
-        }
 
         if (abortController) {
             abortController.abort();
@@ -185,7 +178,6 @@ const StudentTooltipModule = (() => {
                 signal: abortController.signal,
             });
             const data = await res.json();
-            cache.set(cacheKey, data);
             tip.innerHTML = render(data);
         } catch {
             tip.innerHTML = "サマリ取得失敗";

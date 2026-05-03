@@ -572,7 +572,8 @@ def students_index():
 @app.route("/student_log")
 def student_log():
     student_id_arg = request.args.get("student_id")
-    student_name = request.args.get("name", "")
+    requested_student_name = request.args.get("name", "")
+    student_name = requested_student_name
     student_id = normalize_student_id_value(student_id_arg)
     if student_id is None and not student_name:
         return redirect("/students")
@@ -590,6 +591,8 @@ def student_log():
     student_id = normalize_student_id_value(student["student_id"])
     student_name = student.get("name") or student_name or f"student_id:{student_id}"
     student_aliases = student_aliases_for_id(student_id, student_name)
+    if requested_student_name and requested_student_name not in student_aliases:
+        student_aliases.append(requested_student_name)
 
     conn = get_db()
     c = conn.cursor()
@@ -614,7 +617,8 @@ def student_log():
 @app.route("/student_summary")
 def student_summary():
     student_id_arg = request.args.get("student_id")
-    student_name = request.args.get("name", "")
+    requested_student_name = request.args.get("name", "")
+    student_name = requested_student_name
     student_id = normalize_student_id_value(student_id_arg)
     if student_id is None and not student_name:
         return jsonify({"error": "name or student_id is required"}), 400
@@ -626,12 +630,18 @@ def student_summary():
             "student_id": student_id,
         }
 
+    if not student and student_name:
+        student = {"name": student_name, "student_id": student_id}
+
     if not student:
         return jsonify({"error": "student not found"}), 404
 
     student_id = normalize_student_id_value(student["student_id"])
     student_name = student.get("name") or student_name or f"student_id:{student_id}"
+    display_student_name = requested_student_name or student_name
     student_aliases = student_aliases_for_id(student_id, student_name)
+    if requested_student_name and requested_student_name not in student_aliases:
+        student_aliases.append(requested_student_name)
 
     conn = get_db()
     c = conn.cursor()
@@ -642,7 +652,7 @@ def student_summary():
 
     return jsonify(
         {
-            "name": student_name,
+            "name": display_student_name,
             "student_id": student_id,
             "todo_count": todo_count,
             "done_count": done_count,
