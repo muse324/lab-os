@@ -6,6 +6,8 @@
 </head>
 
 <body>
+    {% from "components/task_item.html" import task_actions %}
+
     <h1>{{ student_name }} の研究指導ログ</h1>
     <p><small>student_id: {{ student_id }}</small></p>
 
@@ -16,12 +18,19 @@
         {% for t in tasks %}
         <li>
             {% if t["priority"] == "high" %}🔥{% endif %}
-            {{ t["title"] }}
-            {% if t["source_url"] %}
+            {{ task_actions(
+                t,
+                show_done=t["status"] != "done" and not t["archived"],
+                show_update=not t["archived"],
+                is_done=t["status"] == "done"
+            ) }}
+            {% set source_url = t["source_url"] if t["source_url"] is defined else none %}
+            {% set scrapbox_url = t["scrapbox_url"] if t["scrapbox_url"] is defined else none %}
+            {% if source_url and source_url|string|lower not in ["none", "null"] %}
             <a href="{{ t['source_url'] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る"
                 style="margin-left:6px; text-decoration:none;">🔗</a>
             {% endif %}
-            {% if t["scrapbox_url"] %}
+            {% if scrapbox_url and scrapbox_url|string|lower not in ["none", "null"] %}
             <a href="{{ t['scrapbox_url'] }}" target="_blank" rel="noopener noreferrer" title="Scrapbox"
                 style="margin-left:6px; text-decoration:none;">📘</a>
             {% endif %}
@@ -79,6 +88,30 @@
         <li>締切変更履歴はありません。</li>
         {% endfor %}
     </ul>
+
+    <script>
+        function toggleInlineEdit(button) {
+            const form = button.closest(".inline-edit-form");
+            if (!form) return;
+            const titleSpan = form.querySelector(".inline-edit-title");
+            const titleInput = form.querySelector(".inline-edit-input");
+            if (!titleInput || !titleSpan) return;
+            const isEditing = titleInput.style.display !== "none";
+            if (!isEditing) {
+                titleSpan.style.display = "none";
+                titleInput.style.display = "inline-block";
+                button.textContent = "OK";
+                const strike = form.querySelector("s");
+                if (strike) {
+                    strike.style.display = "none";
+                }
+                titleInput.focus();
+                titleInput.select();
+            } else {
+                form.submit();
+            }
+        }
+    </script>
 </body>
 
 </html>

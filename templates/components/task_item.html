@@ -29,6 +29,7 @@
     <input type="hidden" name="task_id" value="{{ t["task_id"] if t["task_id"] is defined else t["id"] }}">
     <input type="hidden" name="next"
         value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+    <input type="hidden" name="priority_present" value="1">
     <input type="date" name="deadline" value="{{ t["deadline"] if t["deadline"] is defined and t["deadline"] else ""
         }}">
     <label>
@@ -74,9 +75,15 @@
     %}
     (元: {{ t["original_deadline_display"] }})
     {% endif %}
+    {% set source_url = t["source_url"] if t["source_url"] is defined else none %}
+    {% set scrapbox_url = t["scrapbox_url"] if t["scrapbox_url"] is defined else none %}
     <span class="task-links">
+        {% if source_url and source_url|string|lower not in ["none", "null"] %}
         <a href="{{ t.source_url }}" target="_blank">🔗</a>
+        {% endif %}
+        {% if scrapbox_url and scrapbox_url|string|lower not in ["none", "null"] %}
         <a href="{{ t.scrapbox_url }}" target="_blank">📘</a>
+        {% endif %}
     </span>
 </li>
 {% endmacro %}

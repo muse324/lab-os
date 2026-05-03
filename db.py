@@ -256,7 +256,9 @@ def move_task_to_project(cursor, task_id, new_project_id):
     )
 
 
-def update_task_deadline_and_priority(cursor, task_id, new_deadline, make_high):
+def update_task_deadline_and_priority(
+    cursor, task_id, new_deadline, make_high, priority_submitted=False
+):
     current = cursor.execute(
         "SELECT deadline FROM tasks WHERE id=?", (task_id,)
     ).fetchone()
@@ -273,10 +275,10 @@ def update_task_deadline_and_priority(cursor, task_id, new_deadline, make_high):
             (task_id, old_deadline, new_deadline),
         )
 
-    if make_high == "high":
+    if priority_submitted:
         cursor.execute(
-            "UPDATE tasks SET priority='high' WHERE id=?",
-            (task_id,),
+            "UPDATE tasks SET priority=? WHERE id=?",
+            ("high" if make_high == "high" else "medium", task_id),
         )
 
 
@@ -446,6 +448,133 @@ def insert_task(cursor, title, project_id, deadline, priority, student_id, statu
 
 def mark_task_done(cursor, task_id):
     cursor.execute("UPDATE tasks SET status='done' WHERE id=?", (task_id,))
+
+
+def _first_nonempty(*values):
+    for value in values:
+        if value not in (None, "", "None", "none", "NULL", "null"):
+            return value
+    return None
+
+
+def merge_project_tasks(
+    cursor,
+    project_id,
+    keep_task_id,
+    merge_task_ids,
+    merged_title=None,
+    merged_deadline=None,
+    merged_priority=None,
+):
+    keep_task_id = int(keep_task_id)
+    merge_task_ids = [int(task_id) for task_id in merge_task_ids if int(task_id) != keep_task_id]
+    if not merge_task_ids:
+        raise ValueError("統合対象タスクが選択されていません")
+
+    all_task_ids = [keep_task_id] + merge_task_ids
+    placeholders = ",".join(["?"] * len(all_task_ids))
+    rows = cursor.execute(
+        f"""
+        SELECT *
+        FROM tasks
+        WHERE id IN ({placeholders})
+          AND project_id=?
+        """,
+        tuple(all_task_ids + [int(project_id)]),
+    ).fetchall()
+
+    rows_by_id = {row["id"]: row for row in rows}
+    if set(rows_by_id) != set(all_task_ids):
+        raise ValueError("統合対象に別プロジェクトのタスク、または存在しないタスクが含まれています")
+
+    keep = rows_by_id[keep_task_id]
+    merged_rows = [rows_by_id[task_id] for task_id in merge_task_ids]
+
+    title = (merged_title or "").strip() or keep["title"]
+    deadline = merged_deadline if merged_deadline not in ("", None) else keep["deadline"]
+    priority = merged_priority or keep["priority"]
+    if priority not in ("high", "medium", "low"):
+        priority = "medium"
+
+    source_url = _first_nonempty(
+        keep["source_url"], *[row["source_url"] for row in merged_rows]
+    )
+    scrapbox_url = _first_nonempty(
+        keep["scrapbox_url"], *[row["scrapbox_url"] for row in merged_rows]
+    )
+    student_id = _first_nonempty(
+        keep["student_id"], *[row["student_id"] for row in merged_rows]
+    )
+    original_deadline = _first_nonempty(
+        keep["original_deadline"], *[row["original_deadline"] for row in merged_rows]
+    )
+
+    old_deadline = keep["deadline"]
+    cursor.execute(
+        """
+        UPDATE tasks
+        SET title=?, deadline=?, priority=?, source_url=?, scrapbox_url=?,
+            student_id=?, original_deadline=?
+        WHERE id=?
+        """,
+        (
+            title,
+            deadline,
+            priority,
+            source_url,
+            scrapbox_url,
+            student_id,
+            original_deadline,
+            keep_task_id,
+        ),
+    )
+
+    if deadline != old_deadline:
+        cursor.execute(
+            """
+            INSERT INTO task_history (task_id, old_deadline, new_deadline, changed_at)
+            VALUES (?, ?, ?, datetime('now'))
+            """,
+            (keep_task_id, old_deadline, deadline),
+        )
+
+    merge_placeholders = ",".join(["?"] * len(merge_task_ids))
+    cursor.execute(
+        f"UPDATE notes SET task_id=? WHERE task_id IN ({merge_placeholders})",
+        tuple([keep_task_id] + merge_task_ids),
+    )
+    cursor.execute(
+        f"UPDATE task_history SET task_id=? WHERE task_id IN ({merge_placeholders})",
+        tuple([keep_task_id] + merge_task_ids),
+    )
+    cursor.execute(
+        f"UPDATE sync_history SET task_id=? WHERE task_id IN ({merge_placeholders})",
+        tuple([keep_task_id] + merge_task_ids),
+    )
+
+    cursor.execute(
+        f"UPDATE tasks SET archived=1, source_type='manual_merge' WHERE id IN ({merge_placeholders})",
+        tuple(merge_task_ids),
+    )
+
+    for row in merged_rows:
+        cursor.execute(
+            """
+            INSERT INTO sync_history (
+                task_id, sync_key, field_name, old_value, new_value, changed_at, source_type
+            )
+            VALUES (?, ?, 'merged_into_task', ?, ?, datetime('now'), 'manual_merge')
+            """,
+            (row["id"], row["sync_key"], row["title"], str(keep_task_id)),
+        )
+
+    return {
+        "keep_task_id": keep_task_id,
+        "merged_task_ids": merge_task_ids,
+        "title": title,
+        "deadline": deadline,
+        "priority": priority,
+    }
 
 
 def fetch_project_detail_rows(cursor, project_id, task_id_filter=None):

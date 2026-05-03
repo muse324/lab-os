@@ -26,6 +26,7 @@ from db import (
     insert_project,
     insert_task,
     mark_task_done,
+    merge_project_tasks,
     move_task_to_project,
     update_task_deadline_and_priority,
     update_task_title as update_task_title_row,
@@ -419,7 +420,9 @@ def build_archived_tasks_with_reason(archived_rows):
     archived_tasks = []
     for t in archived_rows:
         d = dict(t)
-        if d.get("source_type") in ["chatgpt_memory", "manual_json"] and d.get(
+        if d.get("source_type") == "manual_merge":
+            d["archive_reason"] = "タスク統合でアーカイブ"
+        elif d.get("source_type") in ["chatgpt_memory", "manual_json"] and d.get(
             "sync_key"
         ):
             d["archive_reason"] = "同期差分でアーカイブ"
@@ -536,15 +539,19 @@ def update_task():
     task_id = request.form["task_id"]
     new_deadline = request.form.get("deadline")
     make_high = request.form.get("priority")
+    priority_submitted = request.form.get("priority_present") == "1"
+    next_url = request.form.get("next")
 
     conn = get_db()
     c = conn.cursor()
 
-    update_task_deadline_and_priority(c, task_id, new_deadline, make_high)
+    update_task_deadline_and_priority(
+        c, task_id, new_deadline, make_high, priority_submitted
+    )
     conn.commit()
     conn.close()
 
-    return redirect("/")
+    return redirect(next_url or "/")
 
 
 # =========================================================
@@ -744,6 +751,41 @@ def project_detail(project_id):
         **context,
         students=STUDENTS_DATA,
     )
+
+
+@app.route("/merge_tasks", methods=["POST"])
+def merge_tasks():
+    project_id = request.form.get("project_id", type=int)
+    keep_task_id = request.form.get("keep_task_id", type=int)
+    merge_task_ids = request.form.getlist("merge_task_ids")
+    merged_title = request.form.get("merged_title")
+    merged_deadline = request.form.get("merged_deadline")
+    merged_priority = "high" if request.form.get("merged_priority") == "high" else None
+    next_url = request.form.get("next") or (f"/project/{project_id}" if project_id else "/")
+
+    if not project_id or not keep_task_id:
+        return "project_id and keep_task_id are required", 400
+
+    conn = get_db()
+    c = conn.cursor()
+    try:
+        merge_project_tasks(
+            c,
+            project_id,
+            keep_task_id,
+            merge_task_ids,
+            merged_title,
+            merged_deadline,
+            merged_priority,
+        )
+        conn.commit()
+    except ValueError as e:
+        conn.rollback()
+        return str(e), 400
+    finally:
+        conn.close()
+
+    return redirect(next_url)
 
 
 @app.route("/add_note", methods=["POST"])

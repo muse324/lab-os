@@ -79,6 +79,52 @@
     <button type="submit">追加</button>
 </form>
 
+<h2>タスク統合</h2>
+<form action="/merge_tasks" method="post">
+    <input type="hidden" name="project_id" value="{{ project["id"] }}">
+    <input type="hidden" name="next" value="/project/{{ project["id"] }}">
+
+    <div style="margin-bottom:6px;">
+        <label>
+            残すタスク:
+            <select name="keep_task_id" required>
+                {% for t in tasks %}
+                    {% if not t["archived"] %}
+                        <option value="{{ t["task_id"] }}">
+                            #{{ t["task_id"] }} {{ t["title"] }}{% if t["deadline_display"] %} [{{ t["deadline_display"] }}]{% endif %}
+                        </option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+
+    <div style="margin-bottom:6px;">
+        統合してアーカイブするタスク:
+        <ul style="margin-top:4px;">
+            {% for t in tasks %}
+                {% if not t["archived"] %}
+                    <li>
+                        <label>
+                            <input type="checkbox" name="merge_task_ids" value="{{ t["task_id"] }}">
+                            #{{ t["task_id"] }} {{ t["title"] }}{% if t["deadline_display"] %} [{{ t["deadline_display"] }}]{% endif %}
+                        </label>
+                    </li>
+                {% endif %}
+            {% endfor %}
+        </ul>
+    </div>
+
+    <input name="merged_title" placeholder="統合後タイトル（空欄なら残すタスクのタイトル）" style="width:320px;">
+    <input type="date" name="merged_deadline">
+    <label>
+        <input type="checkbox" name="merged_priority" value="high">
+        重要
+    </label>
+    <button type="submit">選択タスクを統合</button>
+    <small>※統合される側は削除せずアーカイブし、ノートと締切履歴は残すタスクへ移します。</small>
+</form>
+
 <hr>
 
 <h2>⚠ 期限切れ</h2>
@@ -101,6 +147,7 @@
         <form action="/update_task" method="post" style="display:inline;">
             <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
             <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+            <input type="hidden" name="priority_present" value="1">
             <input type="date" name="deadline">
             <label>
                 <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
@@ -142,6 +189,7 @@
         <form action="/update_task" method="post" style="display:inline;">
             <input type="hidden" name="task_id" value="{{ t["task_id"] }}">
             <input type="hidden" name="next" value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+            <input type="hidden" name="priority_present" value="1">
             <input type="date" name="deadline">
             <label>
                 <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
