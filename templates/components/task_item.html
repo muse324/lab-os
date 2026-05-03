@@ -66,5 +66,9 @@
         {% if show_deadline and t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
             (元: {{ t["original_deadline_display"] }})
         {% endif %}
+        <span class="task-links">
+        <a href="{{ t.source_url }}" target="_blank">🔗</a>
+        <a href="{{ t.scrapbox_url }}" target="_blank">📘</a>
+        </span>
     </li>
 {% endmacro %}

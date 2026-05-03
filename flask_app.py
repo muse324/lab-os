@@ -1,4 +1,3 @@
-
 from io import StringIO
 from flask import Flask, render_template, request, redirect, jsonify
 import os
@@ -55,7 +54,7 @@ from task_parser import (
 app = Flask(__name__)  # ← これが最重要
 
 
- # =========================================================
+# =========================================================
 # Student Data Loading
 # =========================================================
 def load_students():
@@ -113,7 +112,7 @@ def export_snapshot(project_name):
     return jsonify(snapshot)
 
 
- # =========================================================
+# =========================================================
 # Snapshot Formatting
 # =========================================================
 def format_snapshot_as_scrapbox(snapshot):
@@ -134,7 +133,6 @@ def format_snapshot_as_scrapbox(snapshot):
     lines.append("#snapshot")
 
     return "\n".join(lines)
-
 
 
 @app.route("/export_snapshot_scrapbox/<project_name>")
@@ -191,7 +189,7 @@ def export_snapshot_scrapbox_all():
     return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
- # =========================================================
+# =========================================================
 # Formatting Utilities
 # =========================================================
 def format_date_jp(date_str):
@@ -264,7 +262,7 @@ def apply_format(rows):
     return result
 
 
- # =========================================================
+# =========================================================
 # Task Classification
 # =========================================================
 def classify_tasks(rows, today_str):
@@ -402,9 +400,7 @@ def build_project_detail_context(project_id, task_id_filter):
 
         all_tasks = apply_format(all_tasks)
         classified = classify_tasks(all_tasks, today_str)
-        archived_tasks = build_archived_tasks_with_reason(
-            classified["archived_tasks"]
-        )
+        archived_tasks = build_archived_tasks_with_reason(classified["archived_tasks"])
 
         notes_by_task_id = {}
         unlinked_notes = []
@@ -443,7 +439,7 @@ def build_project_detail_context(project_id, task_id_filter):
         conn.close()
 
 
- # =========================================================
+# =========================================================
 # Routes: Main Views
 # =========================================================
 @app.route("/")
@@ -508,7 +504,7 @@ def update_task():
     return redirect("/")
 
 
- # =========================================================
+# =========================================================
 # Routes: Student Views
 # =========================================================
 @app.route("/students")
@@ -599,7 +595,7 @@ def student_summary():
     )
 
 
- # =========================================================
+# =========================================================
 # Routes: Project Views
 # =========================================================
 @app.route("/projects")
@@ -626,7 +622,7 @@ def add_project():
     return redirect("/projects")
 
 
- # =========================================================
+# =========================================================
 # Routes: Task Operations
 # =========================================================
 @app.route("/add_task", methods=["POST"])
@@ -771,6 +767,7 @@ def sync_preview():
     return jsonify(response)
 
 
+
 @app.route("/sync_apply", methods=["POST"])
 def sync_apply():
     raw_json = request.form.get("json", "")
@@ -801,6 +798,76 @@ def sync_apply():
             "unchanged": len(diff["unchanged"]),
             "errors": diff["errors"],
             "sync_history": sync_history,
+        }
+    )
+
+
+# --- 新規: 選択同期 ---
+@app.route("/sync_apply_selected", methods=["POST"])
+def sync_apply_selected():
+    import json
+
+    raw_json = request.form.get("json", "")
+    raw_selected = request.form.get("selected", "{}")
+
+    data, error = parse_sync_payload(raw_json)
+    if error:
+        return jsonify(error), 400
+
+    try:
+        selected = json.loads(raw_selected)
+    except Exception:
+        return jsonify({"error": "selected is invalid JSON"}), 400
+
+    selected_create = set(selected.get("create", []))
+    selected_update = set(selected.get("update", []))
+    selected_archive = set(selected.get("archive", []))
+
+    def get_key(item):
+        if isinstance(item, dict):
+            return item.get("sync_key")
+        return item
+
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        diff = build_sync_diff(data, c, STUDENTS_DATA)
+
+        filtered_diff = dict(diff)
+        filtered_diff["create"] = [
+            item for item in diff.get("create", [])
+            if get_key(item) in selected_create
+        ]
+        filtered_diff["update"] = [
+            item for item in diff.get("update", [])
+            if get_key(item) in selected_update
+        ]
+        filtered_diff["archive"] = [
+            item for item in diff.get("archive", [])
+            if get_key(item) in selected_archive
+        ]
+
+        created, updated, archived, updated_task_ids = apply_sync_diff(c, filtered_diff)
+
+        conn.commit()
+        if created or updated or archived:
+            update_snapshot(c)
+            conn.commit()
+        sync_history = fetch_recent_sync_history(c)
+    finally:
+        conn.close()
+
+    return jsonify(
+        {
+            "created": created,
+            "updated": updated,
+            "updated_task_ids": updated_task_ids,
+            "archived": archived,
+            "unchanged": len(diff.get("unchanged", [])),
+            "errors": diff.get("errors", []),
+            "sync_history": sync_history,
+            "selected": selected,
         }
     )
 
@@ -930,6 +997,161 @@ def edit_task_title():
 
     next_url = request.form.get("next")
     return redirect(next_url or "/")
+
+
+
+
+
+@app.route("/gpt_memory_sync", methods=["POST"])
+def gpt_memory_sync():
+    data = request.get_json(force=True, silent=True) or {}
+    raw_text = data.get("text", "")
+
+    if not raw_text:
+        return jsonify({"error": "text is required"}), 400
+
+    try:
+        tasks = extract_tasks_from_gpt_memory(raw_text)
+    except Exception as e:
+        return jsonify({"error": f"extract failed: {str(e)}"}), 500
+
+    normalized_tasks = []
+    for t in tasks:
+        try:
+            nt = normalize_task(t)
+
+            # デフォルト補完
+            nt.setdefault("priority", "medium")
+            nt.setdefault("status", "active")
+            nt.setdefault("notes", "")
+            nt.setdefault("project", nt.get("project") or "General")
+
+            normalized_tasks.append(nt)
+
+        except Exception as e:
+            print("normalize error:", t, e)
+
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        diff = build_sync_diff(normalized_tasks, c, STUDENTS_DATA)
+        created, updated, archived, updated_task_ids = apply_sync_diff(c, diff)
+
+        conn.commit()
+
+        if created or updated or archived:
+            update_snapshot(c)
+            conn.commit()
+
+    finally:
+        conn.close()
+
+    # --- ログ出力 ---
+    print("=== GPT MEMORY SYNC RESULT ===")
+    print(f"created: {created}")
+    print(f"updated: {updated}")
+    print(f"archived: {archived}")
+    print(f"task_count: {len(normalized_tasks)}")
+
+    for t in normalized_tasks:
+        print(f"[TASK] {t.get('title')} | {t.get('project')} | {t.get('deadline')}")
+
+    return jsonify({
+        "status": "ok",
+        "created": created,
+        "updated": updated,
+        "updated_task_ids": updated_task_ids,
+        "archived": archived,
+        "task_count": len(normalized_tasks),
+        "tasks": normalized_tasks  # ← UI確認用
+    })
+
+def normalize_project_name(text):
+    aliases = {
+        "AR楽譜インタフェース": "XR音楽理論インタフェース",
+        "AR音楽理論インタフェース": "XR音楽理論インタフェース",
+        "XR音楽理論インタフェース": "XR音楽理論インタフェース",
+    }
+
+    for old, new in aliases.items():
+        if old in text:
+            return new, old
+
+    # 上位概念は project にしない
+    if "音楽理論ビジュアライゼーション" in text:
+        return None, None
+
+    return None, None
+
+def normalize_task(task):
+    joined = " ".join([
+        str(task.get("title", "")),
+        str(task.get("project", "")),
+        str(task.get("notes", "")),
+    ])
+
+    project, original = normalize_project_name(joined)
+
+    if project:
+        task["project"] = project
+
+    if original:
+        note = task.get("notes") or ""
+        if "元表記" not in note:
+            task["notes"] = (note + f" / 元表記: {original}").strip()
+
+    task["sync_key"] = make_sync_key(task)
+
+    return task
+
+import re
+import hashlib
+
+def extract_tasks_from_gpt_memory(text):
+    tasks = local_generate_sync_tasks(text, STUDENTS_DATA)
+
+    # 空タイトル除去
+    return [t for t in tasks if t.get("title")]
+
+def make_sync_key(task):
+    base = "|".join(
+        [task.get("project") or "", task.get("title") or "", task.get("deadline") or ""]
+    )
+
+    normalized = re.sub(r"\s+", "", base.lower())
+    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10]
+
+    return f"gpt_{digest}"
+
+
+
+@app.route("/gpt_memory_sync_test")
+def gpt_memory_sync_test():
+    return """
+    <html>
+    <body>
+    <h2>GPT Memory Sync Test</h2>
+    <textarea id="input" style="width:100%;height:200px;"></textarea><br>
+    <button onclick="send()">Sync</button>
+    <pre id="output"></pre>
+
+    <script>
+    async function send() {
+        const text = document.getElementById('input').value;
+        const res = await fetch('/gpt_memory_sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text})
+        });
+
+        const data = await res.json();
+        document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+    }
+    </script>
+    </body>
+    </html>
+    """
 
 
 if __name__ == "__main__":
