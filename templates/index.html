@@ -9,7 +9,7 @@
 </head>
 
 <body>
-    <template id="studentsData">{{ students | tojson | safe }}</template>
+    <script id="studentsData" type="application/json">{{ students | tojson | safe }}</script>
     <h1>Lab OS Dashboard</h1>
 
     {% include "components/dashboard_toolbar.html" %}

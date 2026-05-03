@@ -52,6 +52,7 @@ def init_db():
             source_type TEXT,
             source_updated_at TEXT,
             source_url TEXT,
+            scrapbox_url TEXT,
             archived INTEGER DEFAULT 0
         )
         """
@@ -71,6 +72,8 @@ def init_db():
         c.execute("ALTER TABLE tasks ADD COLUMN source_updated_at TEXT")
     if "source_url" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN source_url TEXT")
+    if "scrapbox_url" not in columns:
+        c.execute("ALTER TABLE tasks ADD COLUMN scrapbox_url TEXT")
     if "archived" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0")
 
@@ -153,6 +156,8 @@ def init_db():
     # ===== deadline正規化（空文字→NULL） =====
     c.execute("UPDATE tasks SET deadline=NULL WHERE deadline=''")
     c.execute("UPDATE tasks SET original_deadline=NULL WHERE original_deadline=''")
+    c.execute("UPDATE tasks SET student_id=NULL WHERE student_id=''")
+    c.execute("UPDATE notes SET student_id=NULL WHERE student_id=''")
 
     conn.commit()
     conn.close()
@@ -173,6 +178,9 @@ def fetch_home_tasks(cursor):
             tasks.priority AS priority,
             tasks.original_deadline AS original_deadline,
             tasks.archived AS archived,
+            tasks.student_id AS student_id,
+            tasks.source_url AS source_url,
+            tasks.scrapbox_url AS scrapbox_url,
             projects.id AS project_id,
             projects.name AS project_name
         FROM tasks
@@ -272,37 +280,86 @@ def update_task_deadline_and_priority(cursor, task_id, new_deadline, make_high):
         )
 
 
-def fetch_student_log_rows(cursor, student_id):
+def _student_text_match_clause(table_alias, text_columns, student_names):
+    clauses = []
+    params = []
+
+    for name in student_names or []:
+        if not name:
+            continue
+        text_clause = " OR ".join([f"{column} LIKE ?" for column in text_columns])
+        clauses.append(
+            f"(({table_alias}.student_id IS NULL OR {table_alias}.student_id = '') "
+            f"AND ({text_clause}))"
+        )
+        params.extend([f"%{name}%"] * len(text_columns))
+
+    return clauses, params
+
+
+def fetch_student_log_rows(cursor, student_id, student_names=None):
+    task_clauses = ["tasks.student_id = ?"]
+    task_params = [student_id]
+    fallback_clauses, fallback_params = _student_text_match_clause(
+        "tasks", ["tasks.title"], student_names
+    )
+    task_clauses.extend(fallback_clauses)
+    task_params.extend(fallback_params)
+    task_where = " OR ".join(task_clauses)
+
     tasks = cursor.execute(
-        """
+        f"""
         SELECT tasks.id AS task_id, tasks.title AS title, tasks.status AS status,
             tasks.deadline AS deadline, tasks.priority AS priority,
+            tasks.original_deadline AS original_deadline,
+            tasks.archived AS archived,
+            tasks.source_url AS source_url,
+            tasks.scrapbox_url AS scrapbox_url,
             projects.id AS project_id, projects.name AS project_name,
             tasks.student_id AS student_id
         FROM tasks
         LEFT JOIN projects ON tasks.project_id = projects.id
-        WHERE tasks.student_id = ?
+        WHERE ({task_where})
         ORDER BY tasks.deadline IS NULL, tasks.deadline
         """,
-        (student_id,),
+        tuple(task_params),
     ).fetchall()
 
+    note_clauses = ["notes.student_id = ?"]
+    note_params = [student_id]
+    fallback_clauses, fallback_params = _student_text_match_clause(
+        "notes", ["notes.title", "notes.content"], student_names
+    )
+    note_clauses.extend(fallback_clauses)
+    note_params.extend(fallback_params)
+    note_where = " OR ".join(note_clauses)
+
     notes = cursor.execute(
-        """
+        f"""
         SELECT notes.id AS note_id, notes.title AS title, notes.content AS content,
             notes.created_at AS created_at, notes.scrapbox_url AS scrapbox_url,
+            notes.task_id AS task_id,
             projects.id AS project_id, projects.name AS project_name,
             notes.student_id AS student_id
         FROM notes
         LEFT JOIN projects ON notes.project_id = projects.id
-        WHERE notes.student_id = ?
+        WHERE ({note_where})
         ORDER BY notes.created_at DESC
         """,
-        (student_id,),
+        tuple(note_params),
     ).fetchall()
 
+    history_clauses = ["t.student_id = ?"]
+    history_params = [student_id]
+    fallback_clauses, fallback_params = _student_text_match_clause(
+        "t", ["t.title"], student_names
+    )
+    history_clauses.extend(fallback_clauses)
+    history_params.extend(fallback_params)
+    history_where = " OR ".join(history_clauses)
+
     history = cursor.execute(
-        """
+        f"""
         SELECT th.task_id AS task_id, t.title AS task_title,
             th.old_deadline AS old_deadline, th.new_deadline AS new_deadline,
             th.changed_at AS changed_at,
@@ -311,53 +368,62 @@ def fetch_student_log_rows(cursor, student_id):
         FROM task_history th
         LEFT JOIN tasks t ON th.task_id = t.id
         LEFT JOIN projects ON t.project_id = projects.id
-        WHERE t.student_id = ?
+        WHERE ({history_where})
         ORDER BY th.changed_at DESC
         """,
-        (student_id,),
+        tuple(history_params),
     ).fetchall()
 
     return tasks, notes, history
 
 
-def fetch_student_summary_rows(cursor, student_id):
+def fetch_student_summary_rows(cursor, student_id, student_names=None):
+    task_clauses = ["tasks.student_id = ?"]
+    task_params = [student_id]
+    fallback_clauses, fallback_params = _student_text_match_clause(
+        "tasks", ["tasks.title"], student_names
+    )
+    task_clauses.extend(fallback_clauses)
+    task_params.extend(fallback_params)
+    task_where = " OR ".join(task_clauses)
+
     todo_count = cursor.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM tasks
-        WHERE student_id = ? AND archived = 0 AND status != 'done'
+        WHERE ({task_where}) AND archived = 0 AND status != 'done'
         """,
-        (student_id,),
+        tuple(task_params),
     ).fetchone()[0]
 
     done_count = cursor.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM tasks
-        WHERE student_id = ? AND archived = 0 AND status = 'done'
+        WHERE ({task_where}) AND archived = 0 AND status = 'done'
         """,
-        (student_id,),
+        tuple(task_params),
     ).fetchone()[0]
 
     overdue_count = cursor.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM tasks
-        WHERE student_id = ? AND archived = 0 AND status != 'done'
+        WHERE ({task_where}) AND archived = 0 AND status != 'done'
           AND deadline IS NOT NULL AND deadline != '' AND deadline < date('now')
         """,
-        (student_id,),
+        tuple(task_params),
     ).fetchone()[0]
 
     next_tasks = cursor.execute(
-        """
+        f"""
         SELECT title, deadline
         FROM tasks
-        WHERE student_id = ? AND archived = 0 AND status != 'done'
+        WHERE ({task_where}) AND archived = 0 AND status != 'done'
         ORDER BY deadline IS NULL, deadline
         LIMIT 3
         """,
-        (student_id,),
+        tuple(task_params),
     ).fetchall()
 
     return todo_count, done_count, overdue_count, next_tasks
@@ -371,6 +437,7 @@ def insert_project(cursor, name, type_):
 
 
 def insert_task(cursor, title, project_id, deadline, priority, student_id, status="todo"):
+    student_id = student_id or None
     cursor.execute(
         "INSERT INTO tasks (title, status, project_id, deadline, original_deadline, student_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (title, status, project_id, deadline, deadline, student_id, priority),
@@ -387,7 +454,8 @@ def fetch_project_detail_rows(cursor, project_id, task_id_filter=None):
     tasks = cursor.execute(
         """
         SELECT id AS task_id, title, status, deadline, priority, archived,
-               original_deadline, sync_key, source_type, source_updated_at
+               original_deadline, sync_key, source_type, source_updated_at,
+               source_url, scrapbox_url, student_id
         FROM tasks
         WHERE project_id=?
         ORDER BY deadline IS NULL, deadline
@@ -434,6 +502,7 @@ def fetch_project_detail_rows(cursor, project_id, task_id_filter=None):
 
 
 def insert_note(cursor, title, content, project_id, student_id, task_id, scrapbox_url):
+    student_id = student_id or None
     cursor.execute(
         """
             INSERT INTO notes (title, content, project_id, student_id, task_id, scrapbox_url, created_at)
@@ -448,9 +517,10 @@ def insert_imported_task(cursor, task):
         """
             INSERT INTO tasks (
                 title, status, project_id, deadline, original_deadline,
-                student_id, priority, sync_key, source_type, source_updated_at, archived
+                student_id, priority, sync_key, source_type, source_updated_at,
+                source_url, scrapbox_url, archived
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task.get("title"),
@@ -463,6 +533,8 @@ def insert_imported_task(cursor, task):
             task.get("sync_key"),
             task.get("source_type", "manual_json"),
             task.get("source_updated_at"),
+            task.get("source_url"),
+            task.get("scrapbox_url"),
             int(task.get("archived", 0)),
         ),
     )

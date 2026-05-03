@@ -98,6 +98,10 @@
   }
 
   function initStudentLinks() {
+    if (!window.students || window.students.length === 0) {
+      initStudentsData();
+    }
+
     document
       .querySelectorAll(
         "[data-task-id], .task-title-scope, .note-title-scope, .history-title-scope",

@@ -7,6 +7,7 @@
 
 <body>
     <h1>{{ student_name }} の研究指導ログ</h1>
+    <p><small>student_id: {{ student_id }}</small></p>
 
     <p><a href="/students">← 学生一覧</a> | <a href="/">Dashboard</a></p>
 
@@ -15,12 +16,23 @@
         {% for t in tasks %}
         <li>
             {% if t["priority"] == "high" %}🔥{% endif %}
-            {{ t["title"] }}{% if t["source_url"] %}<a href="{{ t[" source_url"] }}" target="_blank"
-                rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif
-            %}
-            （<a href="/project/{{ t[" project_id"] }}">{{ t["project_name"] }}</a>）
+            {{ t["title"] }}
+            {% if t["source_url"] %}
+            <a href="{{ t['source_url'] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る"
+                style="margin-left:6px; text-decoration:none;">🔗</a>
+            {% endif %}
+            {% if t["scrapbox_url"] %}
+            <a href="{{ t['scrapbox_url'] }}" target="_blank" rel="noopener noreferrer" title="Scrapbox"
+                style="margin-left:6px; text-decoration:none;">📘</a>
+            {% endif %}
+            （{% if t["project_id"] %}
+            <a href="/project/{{ t['project_id'] }}">{{ t["project_name"] }}</a>
+            {% else %}
+            {{ t["project_name"] or "未分類" }}
+            {% endif %}）
             {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
             {% if t["status"] == "done" %}[完了]{% endif %}
+            {% if t["archived"] %}[アーカイブ]{% endif %}
         </li>
         {% else %}
         <li>関連タスクはありません。</li>
@@ -32,11 +44,15 @@
         {% for n in notes %}
         <li>
             <b>{{ n["title"] }}</b>
-            （<a href="/project/{{ n[" project_id"] }}">{{ n["project_name"] }}</a>）<br>
-            {{ n["content"] }}<br>
+            （{% if n["project_id"] %}
+            <a href="/project/{{ n['project_id'] }}">{{ n["project_name"] }}</a>
+            {% else %}
+            {{ n["project_name"] or "未分類" }}
+            {% endif %}）<br />
+            {{ n["content"] }}<br />
             <small>{{ n["created_at"] }}</small>
             {% if n["scrapbox_url"] %}
-            <a href="{{ n[" scrapbox_url"] }}">Scrapbox</a>
+            <a href="{{ n['scrapbox_url'] }}" target="_blank" rel="noopener noreferrer">Scrapbox</a>
             {% endif %}
         </li>
         {% else %}
@@ -49,7 +65,11 @@
         {% for h in history %}
         <li>
             <b>{{ h["task_title"] }}</b>
-            （<a href="/project/{{ h[" project_id"] }}">{{ h["project_name"] }}</a>）<br>
+            （{% if h["project_id"] %}
+            <a href="/project/{{ h['project_id'] }}">{{ h["project_name"] }}</a>
+            {% else %}
+            {{ h["project_name"] or "未分類" }}
+            {% endif %}）<br />
             {% if h["old_deadline_display"] %}{{ h["old_deadline_display"] }}{% else %}未設定{% endif %}
             →
             {% if h["new_deadline_display"] %}{{ h["new_deadline_display"] }}{% else %}未設定{% endif %}

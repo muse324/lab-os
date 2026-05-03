@@ -64,7 +64,7 @@ const StudentLinkModule = (() => {
                     }
 
                     const a = document.createElement("a");
-                    a.href = `/student_log?name=${encodeURIComponent(matchedStudent.rawName)}`;
+                    a.href = `/student_log?student_id=${encodeURIComponent(matchedStudent.student_id)}&name=${encodeURIComponent(matchedStudent.rawName)}`;
                     a.style.color = "inherit";
                     a.style.textDecoration = "underline";
                     a.textContent = matchedText;
@@ -159,14 +159,16 @@ const StudentTooltipModule = (() => {
     async function show(link, event) {
         const tip = ensureTooltip();
         const name = link.dataset.studentName;
-        if (!name) return;
+        const studentId = link.dataset.studentId;
+        if (!name && !studentId) return;
+        const cacheKey = studentId || name;
 
         positionTooltip(event);
         tip.style.display = "block";
         tip.innerHTML = "読込中...";
 
-        if (cache.has(name)) {
-            tip.innerHTML = render(cache.get(name));
+        if (cache.has(cacheKey)) {
+            tip.innerHTML = render(cache.get(cacheKey));
             return;
         }
 
@@ -176,11 +178,14 @@ const StudentTooltipModule = (() => {
         abortController = new AbortController();
 
         try {
-            const res = await fetch(`/student_summary?name=${encodeURIComponent(name)}`, {
+            const params = new URLSearchParams();
+            if (studentId) params.set("student_id", studentId);
+            if (name) params.set("name", name);
+            const res = await fetch(`/student_summary?${params.toString()}`, {
                 signal: abortController.signal,
             });
             const data = await res.json();
-            cache.set(name, data);
+            cache.set(cacheKey, data);
             tip.innerHTML = render(data);
         } catch {
             tip.innerHTML = "サマリ取得失敗";

@@ -42,6 +42,7 @@ from sync import (
 )
 from task_parser import (
     build_quick_task_payload,
+    guess_student_id,
     local_generate_sync_tasks,
     normalize_quotes,
 )
@@ -99,6 +100,48 @@ def load_students():
 
 # グローバルで読み込み
 STUDENTS_DATA = load_students()
+
+
+def normalize_student_id_value(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def find_student(student_id=None, student_name=""):
+    normalized_id = normalize_student_id_value(student_id)
+
+    if normalized_id is not None:
+        for s in STUDENTS_DATA:
+            if normalize_student_id_value(s.get("student_id")) == normalized_id:
+                return s
+
+    if student_name:
+        for s in STUDENTS_DATA:
+            if s.get("name") == student_name and s.get("student_id"):
+                return s
+
+    return None
+
+
+def student_aliases_for_id(student_id, primary_name=""):
+    normalized_id = normalize_student_id_value(student_id)
+    aliases = []
+
+    if primary_name:
+        aliases.append(primary_name)
+
+    for s in STUDENTS_DATA:
+        if normalize_student_id_value(s.get("student_id")) != normalized_id:
+            continue
+        name = s.get("name")
+        if name and name not in aliases:
+            aliases.append(name)
+
+    return aliases
 
 
 @app.route("/export_snapshot/<project_name>")
@@ -514,33 +557,43 @@ def students_index():
     # 学籍番号昇順（上級生→下級生）
     students.sort(key=lambda x: x["student_id"])
 
-    names = [s["name"] for s in students]
+    student_rows = []
+    seen_student_ids = set()
+    for s in students:
+        student_id = normalize_student_id_value(s.get("student_id"))
+        if student_id in seen_student_ids:
+            continue
+        seen_student_ids.add(student_id)
+        student_rows.append({"name": s["name"], "student_id": student_id})
 
-    return render_template("students.html", students=names)
+    return render_template("students.html", students=student_rows)
 
 
 @app.route("/student_log")
 def student_log():
+    student_id_arg = request.args.get("student_id")
     student_name = request.args.get("name", "")
-    if not student_name:
+    student_id = normalize_student_id_value(student_id_arg)
+    if student_id is None and not student_name:
         return redirect("/students")
 
-    student = next(
-        (
-            s
-            for s in STUDENTS_DATA
-            if s.get("name") == student_name and s.get("student_id")
-        ),
-        None,
-    )
+    student = find_student(student_id, student_name)
+    if not student and student_id is not None:
+        student = {
+            "name": student_name or f"student_id:{student_id}",
+            "student_id": student_id,
+        }
+
     if not student:
         return redirect("/students")
 
-    student_id = student["student_id"]
+    student_id = normalize_student_id_value(student["student_id"])
+    student_name = student.get("name") or student_name or f"student_id:{student_id}"
+    student_aliases = student_aliases_for_id(student_id, student_name)
 
     conn = get_db()
     c = conn.cursor()
-    tasks, notes, history = fetch_student_log_rows(c, student_id)
+    tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
     conn.close()
 
     tasks = format_history_rows(tasks)
@@ -550,6 +603,7 @@ def student_log():
     return render_template(
         "student_log.html",
         student_name=student_name,
+        student_id=student_id,
         tasks=tasks,
         notes=notes,
         history=history,
@@ -559,24 +613,30 @@ def student_log():
 # === student_summary API ===
 @app.route("/student_summary")
 def student_summary():
+    student_id_arg = request.args.get("student_id")
     student_name = request.args.get("name", "")
-    if not student_name:
-        return jsonify({"error": "name is required"}), 400
+    student_id = normalize_student_id_value(student_id_arg)
+    if student_id is None and not student_name:
+        return jsonify({"error": "name or student_id is required"}), 400
 
-    matched_students = [
-        s
-        for s in STUDENTS_DATA
-        if s.get("name") == student_name and s.get("student_id")
-    ]
-    if not matched_students:
+    student = find_student(student_id, student_name)
+    if not student and student_id is not None:
+        student = {
+            "name": student_name or f"student_id:{student_id}",
+            "student_id": student_id,
+        }
+
+    if not student:
         return jsonify({"error": "student not found"}), 404
 
-    student_id = matched_students[0]["student_id"]
+    student_id = normalize_student_id_value(student["student_id"])
+    student_name = student.get("name") or student_name or f"student_id:{student_id}"
+    student_aliases = student_aliases_for_id(student_id, student_name)
 
     conn = get_db()
     c = conn.cursor()
     todo_count, done_count, overdue_count, next_tasks = fetch_student_summary_rows(
-        c, student_id
+        c, student_id, student_aliases
     )
     conn.close()
 
@@ -631,7 +691,9 @@ def add_task():
     project_id = request.form["project_id"]
     deadline = request.form.get("deadline") or None
     priority = request.form.get("priority", "medium")
-    student_id = request.form.get("student_id")
+    student_id = normalize_student_id_value(request.form.get("student_id"))
+    if student_id is None:
+        student_id = guess_student_id(title, STUDENTS_DATA)
 
     # ★追加
     next_page = request.form.get("next")
@@ -679,7 +741,7 @@ def add_note():
     title = request.form["title"]
     content = request.form["content"]
     project_id = request.form["project_id"]
-    student_id = request.form.get("student_id")
+    student_id = normalize_student_id_value(request.form.get("student_id"))
     task_id = request.form.get("task_id") or None
     scrapbox_url = request.form["scrapbox_url"]
 
