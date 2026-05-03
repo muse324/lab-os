@@ -1,8 +1,10 @@
 <!doctype html>
 <html>
+
 <head>
     <title>学生ログ</title>
 </head>
+
 <body>
     <h1>{{ student_name }} の研究指導ログ</h1>
 
@@ -13,8 +15,10 @@
         {% for t in tasks %}
         <li>
             {% if t["priority"] == "high" %}🔥{% endif %}
-            {{ t["title"] }}{% if t["source_url"] %}<a href="{{ t["source_url"] }}" target="_blank" rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif %}
-            （<a href="/project/{{ t["project_id"] }}">{{ t["project_name"] }}</a>）
+            {{ t["title"] }}{% if t["source_url"] %}<a href="{{ t[" source_url"] }}" target="_blank"
+                rel="noopener noreferrer" title="元ログを見る" style="margin-left:6px; text-decoration:none;">🔗</a>{% endif
+            %}
+            （<a href="/project/{{ t[" project_id"] }}">{{ t["project_name"] }}</a>）
             {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
             {% if t["status"] == "done" %}[完了]{% endif %}
         </li>
@@ -28,11 +32,11 @@
         {% for n in notes %}
         <li>
             <b>{{ n["title"] }}</b>
-            （<a href="/project/{{ n["project_id"] }}">{{ n["project_name"] }}</a>）<br>
+            （<a href="/project/{{ n[" project_id"] }}">{{ n["project_name"] }}</a>）<br>
             {{ n["content"] }}<br>
             <small>{{ n["created_at"] }}</small>
             {% if n["scrapbox_url"] %}
-            <a href="{{ n["scrapbox_url"] }}">Scrapbox</a>
+            <a href="{{ n[" scrapbox_url"] }}">Scrapbox</a>
             {% endif %}
         </li>
         {% else %}
@@ -45,7 +49,7 @@
         {% for h in history %}
         <li>
             <b>{{ h["task_title"] }}</b>
-            （<a href="/project/{{ h["project_id"] }}">{{ h["project_name"] }}</a>）<br>
+            （<a href="/project/{{ h[" project_id"] }}">{{ h["project_name"] }}</a>）<br>
             {% if h["old_deadline_display"] %}{{ h["old_deadline_display"] }}{% else %}未設定{% endif %}
             →
             {% if h["new_deadline_display"] %}{{ h["new_deadline_display"] }}{% else %}未設定{% endif %}
@@ -56,4 +60,5 @@
         {% endfor %}
     </ul>
 </body>
+
 </html>

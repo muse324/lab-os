@@ -1,18 +1,14 @@
 {# -*- mode: django; -*- #}
 <!doctype html>
 <html>
-  <head>
+
+<head>
     <title>Lab OS</title>
-    <script
-      src="{{ url_for('static', filename='js/student-modules.js') }}"
-      defer
-    ></script>
-    <script
-      src="{{ url_for('static', filename='js/dashboard.js') }}"
-      defer
-    ></script>
-  </head>
-  <body>
+    <script src="{{ url_for('static', filename='js/student-modules.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+</head>
+
+<body>
     <template id="studentsData">{{ students | tojson | safe }}</template>
     <h1>Lab OS Dashboard</h1>
 
@@ -23,15 +19,14 @@
 
     <!-- 右寄せにしたいがためのコンテナ -->
     <div style="margin-top:10px;">
-      <div
-        id="actions"
-        style="max-width:400px; width:100%; background:#f0f0f0; padding:10px; border-radius:8px; float:right; margin-left:20px;"
-      >
-        {% include "components/dashboard_sync_panel.html" %}
-        {% include "components/dashboard_task_forms.html" %}
-      </div>
+        <div id="actions"
+            style="max-width:400px; width:100%; background:#f0f0f0; padding:10px; border-radius:8px; float:right; margin-left:20px;">
+            {% include "components/dashboard_sync_panel.html" %}
+            {% include "components/dashboard_task_forms.html" %}
+        </div>
     </div>
 
     <div>{% include "components/dashboard_task_sections.html" %}</div>
-  </body>
+</body>
+
 </html>
