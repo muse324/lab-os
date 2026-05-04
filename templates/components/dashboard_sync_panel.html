@@ -1,15 +1,140 @@
-<h2>タスク同期</h2>
+<h2>手動同期</h2>
 <form id="syncForm">
-  <textarea id="memoInput" name="memo" placeholder="メモを貼り付けて、ローカルでJSON自動生成" style="width:100%; height:120px"></textarea>
-  <br />
-  <button type="button" onclick="generateSyncJson()">JSON生成</button>
-  <br /><br />
+  <section style="border-top:1px solid #ccc; padding-top:8px; margin-top:6px;">
+    <h3 style="margin:0 0 6px;">OS → GPT</h3>
+    <div
+      style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px;"
+    >
+      <button
+        type="button"
+        onclick="exportMemo()"
+        title="OS上の現在のタスク一覧を、GPTへ渡すためのメモとして下の作業メモ欄へ入れます"
+      >
+        全タスクをGPT用メモ欄へ
+      </button>
+      <button
+        type="button"
+        onclick="exportDelta()"
+        title="前回同期から変わったタスクだけを、GPTへ渡すためのメモとして下の作業メモ欄へ入れます"
+      >
+        変更分をGPT用メモ欄へ
+      </button>
+      <button
+        type="button"
+        onclick="exportDeltaJson()"
+        title="前回同期から変わったタスクだけを、GPT確認用のJSONとして下の作業メモ欄へ入れます"
+      >
+        変更分JSONをGPT用メモ欄へ
+      </button>
+      <button
+        type="button"
+        onclick="copyMemoToClipboard()"
+        title="作業メモ欄の内容を、GPTへ貼るためにクリップボードへコピーします"
+      >
+        作業メモをGPTへコピー
+      </button>
+    </div>
+  </section>
 
-  <textarea id="jsonInput" name="json" placeholder="JSON貼り付け（sync_key省略可）" style="width:100%; height:150px"></textarea>
-  <br />
-  <button type="button" onclick="previewSync()">差分確認</button>
-  <button type="button" onclick="applySelectedSync()">選択分だけ同期</button>
-  <button type="button" onclick="applySync()">全同期実行</button>
-  <button type="button" onclick="importTasks()">従来インポート</button>
+  <section style="border-top:1px solid #ccc; padding-top:8px; margin-top:8px;">
+    <h3 style="margin:0 0 6px;">作業メモ</h3>
+    <label for="memoInput" style="display:block; font-size:0.9em;"
+      >GPT/Scrapboxと受け渡すテキスト</label
+    >
+    <textarea
+      id="memoInput"
+      name="memo"
+      placeholder="OSから出したメモ、GPTの返答、Scrapbox本文をここに置く"
+      style="width:100%; height:130px; box-sizing:border-box;"
+    ></textarea>
+    <div
+      style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0 10px;"
+    >
+      <button
+        type="button"
+        onclick="generateSyncJson()"
+        title="作業メモ欄の文章をローカル解析し、OSへ反映するためのJSONを下のJSON欄へ入れます"
+      >
+        作業メモをOS反映JSONへ
+      </button>
+    </div>
+  </section>
+
+  <section style="border-top:1px solid #ccc; padding-top:8px; margin-top:8px;">
+    <h3 style="margin:0 0 6px;">GPT → OS / Scrapbox → OS</h3>
+    <label for="jsonInput" style="display:block; font-size:0.9em;"
+      >OSへ反映するJSON</label
+    >
+    <textarea
+      id="jsonInput"
+      name="json"
+      placeholder="GPTが返したJSON、または作業メモから生成したJSONをここに置く（sync_key省略可）"
+      style="width:100%; height:150px; box-sizing:border-box;"
+    ></textarea>
+    <div
+      style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0 10px;"
+    >
+      <button
+        type="button"
+        onclick="previewSync()"
+        title="JSON欄の内容をDBへ書き込まずに比較し、新規・更新・完了化の候補を表示します"
+      >
+        JSON差分を確認
+      </button>
+      <button
+        type="button"
+        onclick="applySelectedSync()"
+        title="差分確認でチェックした候補だけをOSへ反映します"
+      >
+        選択した差分をOSへ反映
+      </button>
+      <button
+        type="button"
+        onclick="applySync()"
+        title="JSON欄の全候補をOSへ反映します"
+      >
+        JSON全件をOSへ反映
+      </button>
+      <button
+        type="button"
+        onclick="importTasks()"
+        title="差分確認を通さずJSONを旧方式で追加します。通常は使いません"
+      >
+        旧方式でJSON追加
+      </button>
+    </div>
+  </section>
+
+  <section style="border-top:1px solid #ccc; padding-top:8px; margin-top:8px;">
+    <h3 style="margin:0 0 6px;">GPT → Scrapbox / OS → Scrapbox</h3>
+    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+      <button
+        type="button"
+        onclick="copyMemoToClipboard()"
+        title="GPTが作ったScrapbox本文など、作業メモ欄の内容をScrapboxへ貼るためにコピーします"
+      >
+        作業メモをScrapbox用にコピー
+      </button>
+      <select
+        id="snapshotProject"
+        title="Scrapboxへ貼るOS Snapshotの対象プロジェクトを選びます"
+      >
+        <option value="__all__">全体状態（プロジェクト横断）</option>
+        {% for p in projects %}
+          <option value="{{ p[1] }}">{{ p[1] }}</option>
+        {% endfor %}
+      </select>
+      <button
+        type="button"
+        onclick="copySnapshot()"
+        title="OSの現在状態をScrapbox形式のSnapshotとしてクリップボードへコピーします"
+      >
+        OS SnapshotをScrapbox用にコピー
+      </button>
+    </div>
+  </section>
 </form>
-<div id="syncResult" style="background:#f5f5f5; padding:10px; white-space:pre-wrap"></div>
+<div
+  id="syncResult"
+  style="background:#f5f5f5; padding:10px; white-space:pre-wrap; margin-top:8px;"
+></div>

@@ -1,24 +1,42 @@
-<h2>クイック入力</h2>
+<h2>OSへ即時追加</h2>
 <form action="/quick_add" method="post">
-  <input name="text" placeholder="例：明日までに授業スライド作る（重要）" />
-  <button type="submit">追加</button>
+  <input
+    name="text"
+    placeholder="例：明日までに授業スライド作る（重要）"
+    style="width:100%; box-sizing:border-box;"
+  />
+  <button
+    type="submit"
+    title="自然文をローカル解析し、締切・重要度などを推定してOSへ1件追加します"
+  >
+    自然文を解析して追加
+  </button>
 </form>
 
 <hr />
 
-<h2>タスク追加</h2>
+<h2>OSへ直接追加</h2>
 <form action="/add_task" method="post">
-  <input name="title" placeholder="タスク内容" />
-  <input type="date" name="deadline" />
-  <select name="project_id">
+  <input
+    name="title"
+    placeholder="タスク内容"
+    style="width:100%; box-sizing:border-box;"
+  />
+  <input type="date" name="deadline" title="締切日" />
+  <select name="project_id" title="紐づけるプロジェクト">
     {% for p in projects %}
       <option value="{{ p[0] }}">{{ p[1] }}</option>
     {% endfor %}
   </select>
-  <select name="priority">
+  <select name="priority" title="重要度">
     <option value="medium" selected>通常</option>
     <option value="high">重要</option>
   </select>
   <input type="hidden" name="next" value="/" />
-  <button type="submit">追加</button>
+  <button
+    type="submit"
+    title="入力したタイトル・締切・プロジェクト・重要度をそのままOSへ1件追加します"
+  >
+    指定内容で追加
+  </button>
 </form>

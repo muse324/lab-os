@@ -81,9 +81,30 @@
 
       await navigator.clipboard.writeText(text);
 
-      alert("Snapshotをコピーしました");
+      alert("OS SnapshotをScrapbox用にコピーしました");
+      setSyncResultText("GPT / OS → Scrapbox: OS Snapshotをコピーしました。");
     } catch (e) {
       alert("コピー失敗: " + e);
+    }
+  };
+
+  ExportModule.copyMemoToClipboard = async function () {
+    const memoEl = document.getElementById("memoInput");
+    const text = memoEl?.value || "";
+
+    if (!text.trim()) {
+      alert("作業メモ欄が空です");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("作業メモをコピーしました");
+      setSyncResultText(
+        "作業メモをコピーしました。GPTまたはScrapboxへ貼れます。",
+      );
+    } catch (e) {
+      alert("作業メモのコピー失敗: " + e);
     }
   };
 
@@ -355,6 +376,13 @@
     el.innerHTML = html;
   };
 
+  function setSyncResultText(message) {
+    const el = document.getElementById("syncResult");
+    if (el) {
+      el.textContent = message;
+    }
+  }
+
   SyncModule.generateSyncJson = async function () {
     const memo = document.getElementById("memoInput").value;
     const res = await ApiModule.postForm("/generate_sync_json", { memo });
@@ -371,8 +399,9 @@
       null,
       2,
     );
-    document.getElementById("syncResult").textContent =
-      `JSON生成完了: ${data.tasks.length}件（ローカル解析）`;
+    setSyncResultText(
+      `GPT/Scrapbox → OS: OS反映JSONを生成しました（${data.tasks.length}件、ローカル解析）。`,
+    );
   };
 
   SyncModule.previewSync = async function () {
@@ -489,6 +518,12 @@
 
   SyncModule.importTasks = async function () {
     const json = document.getElementById("jsonInput").value;
+    const confirmed = confirm(
+      "差分確認なしで旧方式インポートを実行します。通常は「JSON差分を確認」から反映してください。続けますか?",
+    );
+
+    if (!confirmed) return;
+
     const form = document.createElement("form");
     form.method = "POST";
     form.action = "/import_tasks";
@@ -549,6 +584,7 @@
     const prompt = buildFullMemoPrompt();
 
     document.getElementById("memoInput").value = prompt + "\n\n" + data.memo;
+    setSyncResultText("OS → GPT: 全タスクをGPT用の作業メモ欄へ入れました。");
   };
 
   ExportModule.exportDelta = async function () {
@@ -558,6 +594,7 @@
     const body = formatDeltaForGPT(data.delta);
 
     document.getElementById("memoInput").value = prompt + "\n\n" + body;
+    setSyncResultText("OS → GPT: 変更分をGPT用の作業メモ欄へ入れました。");
   };
 
   ExportModule.exportDeltaJson = async function () {
@@ -567,6 +604,7 @@
     const body = JSON.stringify(data.delta, null, 2);
 
     document.getElementById("memoInput").value = prompt + "\n\n" + body;
+    setSyncResultText("OS → GPT: 変更分JSONをGPT用の作業メモ欄へ入れました。");
   };
 
   function buildFullMemoPrompt() {
@@ -753,6 +791,7 @@
   window.exportMemo = ExportModule.exportMemo;
   window.exportDelta = ExportModule.exportDelta;
   window.exportDeltaJson = ExportModule.exportDeltaJson;
+  window.copyMemoToClipboard = ExportModule.copyMemoToClipboard;
   window.runDeploy = runDeploy;
   window.toggleAll = toggleAll;
   window.toggleInlineEdit = toggleInlineEdit;
