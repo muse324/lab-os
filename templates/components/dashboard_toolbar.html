@@ -1,36 +1,24 @@
 {% if is_production %}
-  <form id="deployForm" onsubmit="runDeploy(event)">
-    <button type="submit">最新コードに更新</button>
-    <span id="deployResult" style="margin-left:10px;"></span>
-  </form>
+<form id="deployForm" onsubmit="runDeploy(event)">
+  <button type="submit">最新コードに更新</button>
+  <span id="deployResult" style="margin-left:10px;"></span>
+</form>
 {% endif %}
 
-<button
-  type="button"
-  onclick="exportMemo()"
-  title="現在の全タスクをメモとして出力（再生成・整理用）"
->
+<button type="button" onclick="exportMemo()" title="現在の全タスクをメモとして出力（再生成・整理用）">
   📄 全タスクをメモ化
 </button>
-<button
-  type="button"
-  onclick="exportDelta()"
-  title="前回からの変更分のみをメモとして出力（更新反映用）"
->
+<button type="button" onclick="exportDelta()" title="前回からの変更分のみをメモとして出力（更新反映用）">
   🔄 変更分だけメモ化
 </button>
-<button
-  type="button"
-  onclick="exportDeltaJson()"
-  title="変更分をJSONで出力（構造確認・機械処理用）"
->
+<button type="button" onclick="exportDeltaJson()" title="変更分をJSONで出力（構造確認・機械処理用）">
   🧩 変更分をJSON化
 </button>
 
 <select id="snapshotProject">
   <option value="__all__">全体状態（プロジェクト横断）</option>
   {% for p in projects %}
-    <option value="{{ p[1] }}">{{ p[1] }}</option>
+  <option value="{{ p[1] }}">{{ p[1] }}</option>
   {% endfor %}
 </select>
 <button type="button" onclick="copySnapshot()">Snapshotコピー</button>
