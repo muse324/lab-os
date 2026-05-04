@@ -490,6 +490,8 @@ def build_sync_preview_response(data, cursor, students_data=None):
                     "task_id": item["task_id"],
                     "sync_key": item["sync_key"],
                     "title": item["normalized"].get("title"),
+                    "project_id": item["normalized"].get("project_id"),
+                    "project_name": item["normalized"].get("project_name"),
                     "changes": item["changes"],
                 }
                 for item in diff["update"]

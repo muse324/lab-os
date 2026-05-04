@@ -54,6 +54,15 @@
     return String(value);
   };
 
+  UtilsModule.escapeHTML = function (value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
   ExportModule.copySnapshot = async function () {
     const project = document.getElementById("snapshotProject").value;
     if (!project) return;
@@ -213,21 +222,27 @@
   }
 
   function buildDiffTaskLine(t) {
-    const title = t.title || "（無題）";
+    const title = UtilsModule.escapeHTML(t.title || "（無題）");
     const project = t.project || t.project_name || "";
     const deadline = t.deadline ? ` / ${t.deadline}` : "";
     const scrapboxLink = buildScrapboxLink(t);
+    const projectLabel = UtilsModule.escapeHTML(project);
+    const deadlineLabel = UtilsModule.escapeHTML(deadline);
 
     let studentLabel = "";
     if (t.student_name) {
-      studentLabel = ` <span style="color:#0066cc;font-size:0.85em;">👤${t.student_name}</span>`;
+      studentLabel = ` <span style="color:#0066cc;font-size:0.85em;">👤${UtilsModule.escapeHTML(t.student_name)}</span>`;
     } else if (t.student_id) {
-      studentLabel = ` <span style="color:#0066cc;font-size:0.85em;">👤ID:${t.student_id}</span>`;
+      studentLabel = ` <span style="color:#0066cc;font-size:0.85em;">👤ID:${UtilsModule.escapeHTML(t.student_id)}</span>`;
     }
 
     let meta = "";
     if (project || deadline) {
-      meta = ` <span style="color:#666;font-size:0.85em;">${project}${deadline}</span>`;
+      let linkedProject = projectLabel;
+      if (project && t.project_id) {
+        linkedProject = `<a href="/project/${encodeURIComponent(t.project_id)}" style="color:#666;">${projectLabel}</a>`;
+      }
+      meta = ` <span style="color:#666;font-size:0.85em;">${linkedProject}${deadlineLabel}</span>`;
     }
 
     return `${title}${meta}${studentLabel}${scrapboxLink}`;

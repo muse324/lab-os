@@ -48,10 +48,17 @@
     {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
   {% endif %}
   {% set color = ns.color_map[project] %}
+  {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
   <div
     style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
   >
-    <strong style="color: {{ color }}">{{ project or "未分類" }}</strong>
+    <strong style="color: {{ color }}">
+      {% if project_id %}
+        <a href="/project/{{ project_id }}" style="color: {{ color }};">{{ project or "未分類" }}</a>
+      {% else %}
+        {{ project or "未分類" }}
+      {% endif %}
+    </strong>
   </div>
   <ul>
     {% for t in items %}
@@ -66,10 +73,17 @@
     {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
   {% endif %}
   {% set color = ns.color_map[project] %}
+  {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
   <div
     style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
   >
-    <strong style="color: {{ color }}">{{ project or "未分類" }}</strong>
+    <strong style="color: {{ color }}">
+      {% if project_id %}
+        <a href="/project/{{ project_id }}" style="color: {{ color }};">{{ project or "未分類" }}</a>
+      {% else %}
+        {{ project or "未分類" }}
+      {% endif %}
+    </strong>
   </div>
   <ul>
     {% for t in items %}
