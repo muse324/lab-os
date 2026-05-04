@@ -37,6 +37,7 @@
       archived: "アーカイブ (archived)",
       source_type: "同期元 (source_type)",
       source_updated_at: "元データ更新時刻 (source_updated_at)",
+      note: "タスクノート (note)",
     };
     return labels[field] || field;
   };

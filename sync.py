@@ -1,7 +1,9 @@
 import json
+import os
 import re
+from urllib.parse import quote
 
-from db import fetch_all_projects, fetch_inbox_project_id
+from db import fetch_all_projects, fetch_inbox_project_id, insert_note
 from task_parser import normalize_quotes, resolve_project_id_from_text
 
 
@@ -132,6 +134,117 @@ STUDENT_POLICY_TERMS = [
     "優先",
     "計画",
 ]
+
+
+SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", "musestudio")
+
+
+def build_scrapbox_page_url(title):
+    page_name = (title or "").strip()
+    if not page_name:
+        return None
+    return f"https://scrapbox.io/{SCRAPBOX_PROJECT}/{quote(page_name, safe='')}"
+
+
+def _note_value_to_text(value):
+    if value in (None, "", "None", "none", "NULL", "null"):
+        return []
+
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            parts.extend(_note_value_to_text(item))
+        return parts
+
+    if isinstance(value, dict):
+        for key in ("content", "text", "body", "note", "notes"):
+            if key in value:
+                parts = _note_value_to_text(value.get(key))
+                if parts:
+                    return parts
+        return [json.dumps(value, ensure_ascii=False, sort_keys=True)]
+
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def extract_imported_note_content(item):
+    parts = []
+    for key in ("note", "notes"):
+        for text in _note_value_to_text(item.get(key)):
+            if text and text not in parts:
+                parts.append(text)
+    return "\n\n".join(parts) if parts else None
+
+
+def _imported_note_identity(task_id, normalized):
+    content = (normalized.get("note") or "").strip()
+    if not content:
+        return None
+
+    title = normalized.get("note_title") or normalized.get("title") or f"task-{task_id}"
+    scrapbox_url = (
+        normalized.get("note_scrapbox_url")
+        or normalized.get("scrapbox_url")
+        or build_scrapbox_page_url(normalized.get("title"))
+    )
+    return {"title": title, "content": content, "scrapbox_url": scrapbox_url}
+
+
+def imported_task_note_exists(cursor, task_id, normalized):
+    note = _imported_note_identity(task_id, normalized)
+    if not note:
+        return False
+
+    existing = cursor.execute(
+        """
+        SELECT id
+        FROM notes
+        WHERE task_id=?
+          AND title=?
+          AND content=?
+        LIMIT 1
+        """,
+        (task_id, note["title"], note["content"]),
+    ).fetchone()
+    return bool(existing)
+
+
+def build_note_change(cursor, task_id, normalized):
+    note = _imported_note_identity(task_id, normalized)
+    if not note or imported_task_note_exists(cursor, task_id, normalized):
+        return None
+
+    return {
+        "field": "note",
+        "old": None,
+        "new": note["content"],
+        "note_title": note["title"],
+    }
+
+
+def upsert_imported_task_note(cursor, task_id, normalized):
+    note = _imported_note_identity(task_id, normalized)
+    if not note:
+        return False
+
+    if imported_task_note_exists(cursor, task_id, normalized):
+        return False
+
+    insert_note(
+        cursor,
+        note["title"],
+        note["content"],
+        normalized.get("project_id"),
+        normalized.get("student_id"),
+        task_id,
+        note["scrapbox_url"],
+    )
+    return True
 
 
 def parse_sync_payload(raw_json):
@@ -462,6 +575,7 @@ def normalize_sync_item(item, cursor, students_data=None):
     project_name = item.get("project")
     project_id = resolve_project_id(cursor, project_name, students_data)
     sync_key = item.get("sync_key") or generate_sync_key(item)
+    note_content = extract_imported_note_content(item)
     return {
         "sync_key": sync_key,
         "title": item.get("title"),
@@ -475,6 +589,10 @@ def normalize_sync_item(item, cursor, students_data=None):
         "source_type": item.get("source_type", "manual_json"),
         "source_updated_at": item.get("source_updated_at"),
         "source_url": item.get("source_url"),
+        "scrapbox_url": item.get("scrapbox_url"),
+        "note": note_content,
+        "note_title": item.get("note_title"),
+        "note_scrapbox_url": item.get("note_scrapbox_url"),
     }
 
 
@@ -492,6 +610,10 @@ def merge_normalized_task(existing, incoming):
         "archived",
         "source_type",
         "source_updated_at",
+        "source_url",
+        "scrapbox_url",
+        "note_title",
+        "note_scrapbox_url",
     ]:
         new_value = incoming.get(field)
         old_value = merged.get(field)
@@ -514,6 +636,14 @@ def merge_normalized_task(existing, incoming):
 
         if new_value not in [None, ""]:
             merged[field] = new_value
+
+    incoming_note = incoming.get("note")
+    if incoming_note:
+        existing_note = merged.get("note")
+        if existing_note and incoming_note not in existing_note:
+            merged["note"] = f"{existing_note}\n\n{incoming_note}"
+        else:
+            merged["note"] = incoming_note
 
     return merged
 
@@ -558,9 +688,10 @@ def create_task_from_sync(cursor, normalized):
         """
         INSERT INTO tasks (
             title, status, deadline, original_deadline, project_id, student_id,
-            priority, sync_key, source_type, source_updated_at, source_url, archived
+            priority, sync_key, source_type, source_updated_at, source_url,
+            scrapbox_url, archived
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             normalized["title"],
@@ -574,6 +705,7 @@ def create_task_from_sync(cursor, normalized):
             normalized["source_type"],
             normalized["source_updated_at"],
             normalized.get("source_url"),
+            normalized.get("scrapbox_url"),
             normalized["archived"],
         ),
     )
@@ -610,11 +742,12 @@ def record_sync_changes(cursor, task_id, sync_key, source_type, changes):
 
 
 def apply_task_update(cursor, task_id, normalized, changes):
-    if not changes:
+    task_changes = [change for change in changes if change["field"] in SYNC_FIELDS]
+    if not task_changes:
         return
 
-    update_fields = [f"{change['field']}=?" for change in changes]
-    values = [change["new"] for change in changes]
+    update_fields = [f"{change['field']}=?" for change in task_changes]
+    values = [change["new"] for change in task_changes]
     values.append(task_id)
     cursor.execute(
         f"UPDATE tasks SET {', '.join(update_fields)} WHERE id=?",
@@ -655,6 +788,10 @@ def build_sync_diff(imported_items, cursor, students_data=None):
             continue
 
         changes = diff_task(existing, normalized)
+        note_change = build_note_change(cursor, existing["id"], normalized)
+        if note_change:
+            changes.append(note_change)
+
         if changes:
             results["update"].append(
                 {
@@ -667,7 +804,12 @@ def build_sync_diff(imported_items, cursor, students_data=None):
             )
         else:
             results["unchanged"].append(
-                {"task_id": existing["id"], "sync_key": sync_key}
+                {
+                    "task_id": existing["id"],
+                    "sync_key": sync_key,
+                    "source_type": source_type,
+                    "normalized": normalized,
+                }
             )
 
     for source_type in source_types:
@@ -736,11 +878,13 @@ def apply_sync_diff(cursor, diff):
     updated_task_ids = []
 
     for normalized in diff["create"]:
-        create_task_from_sync(cursor, normalized)
+        task_id = create_task_from_sync(cursor, normalized)
+        upsert_imported_task_note(cursor, task_id, normalized)
         created += 1
 
     for item in diff["update"]:
         apply_task_update(cursor, item["task_id"], item["normalized"], item["changes"])
+        upsert_imported_task_note(cursor, item["task_id"], item["normalized"])
         record_sync_changes(
             cursor,
             item["task_id"],
@@ -750,6 +894,9 @@ def apply_sync_diff(cursor, diff):
         )
         updated_task_ids.append(item["task_id"])
         updated += 1
+
+    for item in diff.get("unchanged", []):
+        upsert_imported_task_note(cursor, item["task_id"], item.get("normalized", {}))
 
     for item in diff["archive"]:
         cursor.execute("UPDATE tasks SET archived=1 WHERE id=?", (item["task_id"],))

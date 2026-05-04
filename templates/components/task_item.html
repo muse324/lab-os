@@ -1,89 +1,196 @@
-{% macro task_actions(t, show_done=true, show_update=false, is_done=false) %}
-<form action="/edit_task_title" method="post" class="inline-edit-form" style="display:inline; margin-left:6px;">
-    <input type="hidden" name="task_id" value="{{ t["task_id"] if t["task_id"] is defined else t["id"] }}">
-    <input type="hidden" name="next"
-        value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
+{% macro task_id_value(t) -%}
+  {{ t["task_id"] if t["task_id"] is defined else t["id"] }}
+{%- endmacro %}
+
+{% macro next_url_value() -%}
+  {{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}
+{%- endmacro %}
+
+{% macro task_links(t) %}
+  {% set source_url = t["source_url"] if t["source_url"] is defined else none %}
+  {% set scrapbox_url = t["scrapbox_url"] if t["scrapbox_url"] is defined else none %}
+  {% set generated_scrapbox_url = scrapbox_page_url(t["title"]) %}
+  <span class="task-links">
+    {% if source_url and source_url|string|lower not in ["none", "null"] %}
+      <a
+        href="{{ source_url }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="元ログを見る"
+        style="margin-left:6px; text-decoration:none;"
+        >🔗</a
+      >
+    {% endif %}
+    {% if scrapbox_url and scrapbox_url|string|lower not in ["none", "null"] %}
+      <a
+        href="{{ scrapbox_url }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Scrapbox"
+        style="margin-left:6px; text-decoration:none;"
+        >📘</a
+      >
+    {% elif generated_scrapbox_url %}
+      <a
+        href="{{ generated_scrapbox_url }}"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Scrapbox"
+        style="margin-left:6px; text-decoration:none;"
+        >📘</a
+      >
+    {% endif %}
+  </span>
+{% endmacro %}
+
+{% macro task_project_move(t, projects=none) %}
+  {% if projects %}
+    {% set task_id = task_id_value(t)|trim %}
+    {% set current_project_id = t["project_id"] if t["project_id"] is defined else none %}
+    <form
+      action="/move_task"
+      method="post"
+      style="display:inline; margin-left:4px;"
+    >
+      <input type="hidden" name="task_id" value="{{ task_id }}" />
+      <input type="hidden" name="next" value="{{ next_url_value() }}" />
+      <select name="project_id" style="max-width:180px;">
+        {% for p in projects %}
+          <option
+            value="{{ p["id"] }}"
+            {% if current_project_id and p["id"] == current_project_id %}selected{% endif %}
+          >
+            {{ p["name"] }}
+          </option>
+        {% endfor %}
+      </select>
+      <button type="submit">移動</button>
+    </form>
+  {% endif %}
+{% endmacro %}
+
+{% macro task_note_link(t) %}
+  {% set project_id = t["project_id"] if t["project_id"] is defined else none %}
+  {% if project_id %}
+    <a
+      href="/project/{{ project_id }}?note_task_id={{ task_id_value(t)|trim }}"
+      style="margin-left:6px; font-size:0.85em;"
+      >＋ノート</a
+    >
+  {% endif %}
+{% endmacro %}
+
+{% macro related_notes_block(t) %}
+  {% if t["related_notes"] %}
+    <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
+      関連ノート:
+      {% for n in t["related_notes"] %}
+        {% if n["scrapbox_url"] %}
+          <a
+            href="{{ n["scrapbox_url"] }}"
+            target="_blank"
+            rel="noopener noreferrer"
+            >📝 {{ n["title"] }}</a
+          >
+        {% else %}
+          <span>📝 {{ n["title"] }}</span>
+        {% endif %}
+        {% if not loop.last %}/{% endif %}
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro task_actions(t, show_done=true, show_update=false, is_done=false, show_move=false, projects=none) %}
+  {% set task_id = task_id_value(t)|trim %}
+  <form
+    action="/edit_task_title"
+    method="post"
+    class="inline-edit-form"
+    style="display:inline; margin-left:6px;"
+  >
+    <input type="hidden" name="task_id" value="{{ task_id }}" />
+    <input type="hidden" name="next" value="{{ next_url_value() }}" />
 
     {% if is_done %}
-    <s><span class="inline-edit-title">{{ t["title"] }}</span></s>
+      <s><span class="inline-edit-title">{{ t["title"] }}</span></s>
     {% else %}
-    <span class="inline-edit-title">{{ t["title"] }}</span>
+      <span class="inline-edit-title">{{ t["title"] }}</span>
     {% endif %}
 
-    <input type="text" name="title" value="{{ t["title"] }}" class="inline-edit-input"
-        style="display:none; width:120px;">
-    <button type="button" class="inline-edit-toggle" onclick="toggleInlineEdit(this)">変更</button>
-</form>
-<!-- 完了ボタン -->
-{% if show_done %}
-<form action="/done/{{ t["task_id"] if t["task_id"] is defined else t["id"] }}" method="post"
-    style="display:inline; margin-left:4px">
-    <input type="hidden" name="next"
-        value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
-    <button type="submit">完了</button>
-</form>
-{% endif %}
-<!-- 日付更新 -->
-{% if show_update %}
-<form action="/update_task" method="post" style="display:inline;">
-    <input type="hidden" name="task_id" value="{{ t["task_id"] if t["task_id"] is defined else t["id"] }}">
-    <input type="hidden" name="next"
-        value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
-    <input type="hidden" name="priority_present" value="1">
-    <input type="date" name="deadline" value="{{ t["deadline"] if t["deadline"] is defined and t["deadline"] else ""
-        }}">
-    <label>
-        <input type="checkbox" name="priority" value="high" {% if t["priority"]=="high" %}checked{% endif %}>
+    <input
+      type="text"
+      name="title"
+      value="{{ t["title"] }}"
+      class="inline-edit-input"
+      style="display:none; width:120px;"
+    />
+    <button
+      type="button"
+      class="inline-edit-toggle"
+      onclick="toggleInlineEdit(this)"
+    >
+      変更
+    </button>
+  </form>
+  {{ task_links(t) }}
+  {% if show_done %}
+    <form
+      action="/done/{{ task_id }}"
+      method="post"
+      style="display:inline; margin-left:4px"
+    >
+      <input type="hidden" name="next" value="{{ next_url_value() }}" />
+      <button type="submit">完了</button>
+    </form>
+  {% endif %}
+  {% if show_update %}
+    <form action="/update_task" method="post" style="display:inline;">
+      <input type="hidden" name="task_id" value="{{ task_id }}" />
+      <input type="hidden" name="next" value="{{ next_url_value() }}" />
+      <input type="hidden" name="priority_present" value="1" />
+      <input
+        type="date"
+        name="deadline"
+        value="{{ t["deadline"] if t["deadline"] is defined and t["deadline"] else "" }}"
+      />
+      <label>
+        <input
+          type="checkbox"
+          name="priority"
+          value="high"
+          {% if t["priority"]=="high" %}checked{% endif %}
+        />
         重要
-    </label>
-    <button type="submit">更新</button>
-</form>
-{% endif %}
+      </label>
+      <button type="submit">更新</button>
+    </form>
+  {% endif %}
+  {% if show_move %}
+    {{ task_project_move(t, projects) }}
+  {% endif %}
 {% endmacro %}
 
 {% macro edit_form(task_id, title, is_done=false) %}
-{% set t = {"task_id": task_id, "title": title, "priority": "medium"} %}
-{{ task_actions(t, show_done=false, show_update=false, is_done=is_done) }}
+  {% set t = {"task_id": task_id, "title": title, "priority": "medium"} %}
+  {{ task_actions(t, show_done=false, show_update=false, is_done=is_done) }}
 {% endmacro %}
 
-
-
-
-{% macro edit_form(task_id, title, is_done=false) %}
-<form action="/edit_task_title" method="post" class="inline-edit-form" style="display:inline; margin-left:6px;">
-    <input type="hidden" name="task_id" value="{{ task_id }}">
-    <input type="hidden" name="next"
-        value="{{ request.path }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}">
-
-    {% if is_done %}
-    <s><span class="inline-edit-title">{{ title }}</span></s>
-    {% else %}
-    <span class="inline-edit-title">{{ title }}</span>
-    {% endif %}
-
-    <input type="text" name="title" value="{{ title }}" class="inline-edit-input" style="display:none; width:120px;">
-    <button type="button" class="inline-edit-toggle" onclick="toggleInlineEdit(this)">変更</button>
-</form>
-{% endmacro %}
-
-{% macro render_task_item(t, show_deadline=true, allow_update=false, color="") %}
-<li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="{{ color }}">
+{% macro render_task_item(t, show_deadline=true, allow_update=false, color="", show_move=false, projects=none, show_note_link=false) %}
+  <li
+    data-task-id="{{ t["task_id"] }}"
+    class="task-title-scope"
+    style="{{ color }}"
+  >
     {% if t["priority"] == "high" %}🔥{% endif %}
-    {{ task_actions(t, show_done=true, show_update=allow_update, is_done=false) }}
-    {% if show_deadline and t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
-    {% if show_deadline and t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"]
-    %}
-    (元: {{ t["original_deadline_display"] }})
+    {{ task_actions(t, show_done=true, show_update=allow_update, is_done=false, show_move=show_move, projects=projects) }}
+    {% if show_note_link %}
+      {{ task_note_link(t) }}
     {% endif %}
-    {% set source_url = t["source_url"] if t["source_url"] is defined else none %}
-    {% set scrapbox_url = t["scrapbox_url"] if t["scrapbox_url"] is defined else none %}
-    <span class="task-links">
-        {% if source_url and source_url|string|lower not in ["none", "null"] %}
-        <a href="{{ t.source_url }}" target="_blank">🔗</a>
-        {% endif %}
-        {% if scrapbox_url and scrapbox_url|string|lower not in ["none", "null"] %}
-        <a href="{{ t.scrapbox_url }}" target="_blank">📘</a>
-        {% endif %}
-    </span>
-</li>
+    {% if show_deadline and t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+    {% if show_deadline and t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
+      (元: {{ t["original_deadline_display"] }})
+    {% endif %}
+    {{ related_notes_block(t) }}
+  </li>
 {% endmacro %}

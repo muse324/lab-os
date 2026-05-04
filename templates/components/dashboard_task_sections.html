@@ -1,11 +1,11 @@
-{% from "components/task_item.html" import edit_form, render_task_item %}
+{% from "components/task_item.html" import edit_form, render_task_item with context %}
 
 <hr />
 
 <h2>⚠ 期限切れ</h2>
 <ul>
   {% for t in overdue %}
-    {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red") }}
+    {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red", show_move=true, projects=projects, show_note_link=true) }}
   {% endfor %}
 </ul>
 
@@ -14,7 +14,7 @@
 <h2>今日のタスク</h2>
 <ul>
   {% for t in today %}
-    {{ render_task_item(t, show_deadline=true, allow_update=false, color="color:orange") }}
+    {{ render_task_item(t, show_deadline=true, allow_update=false, color="color:orange", show_move=true, projects=projects, show_note_link=true) }}
   {% endfor %}
 </ul>
 
@@ -54,7 +54,9 @@
   >
     <strong style="color: {{ color }}">
       {% if project_id %}
-        <a href="/project/{{ project_id }}" style="color: {{ color }};">{{ project or "未分類" }}</a>
+        <a href="/project/{{ project_id }}" style="color: {{ color }};"
+          >{{ project or "未分類" }}</a
+        >
       {% else %}
         {{ project or "未分類" }}
       {% endif %}
@@ -62,7 +64,7 @@
   </div>
   <ul>
     {% for t in items %}
-      {{ render_task_item(t, show_deadline=true, allow_update=false) }}
+      {{ render_task_item(t, show_deadline=true, allow_update=false, show_move=true, projects=projects, show_note_link=true) }}
     {% endfor %}
   </ul>
 {% endfor %}
@@ -79,7 +81,9 @@
   >
     <strong style="color: {{ color }}">
       {% if project_id %}
-        <a href="/project/{{ project_id }}" style="color: {{ color }};">{{ project or "未分類" }}</a>
+        <a href="/project/{{ project_id }}" style="color: {{ color }};"
+          >{{ project or "未分類" }}</a
+        >
       {% else %}
         {{ project or "未分類" }}
       {% endif %}
@@ -87,7 +91,7 @@
   </div>
   <ul>
     {% for t in items %}
-      {{ render_task_item(t, show_deadline=true, allow_update=true) }}
+      {{ render_task_item(t, show_deadline=true, allow_update=true, show_move=true, projects=projects, show_note_link=true) }}
     {% endfor %}
   </ul>
 {% endfor %}

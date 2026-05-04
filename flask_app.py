@@ -4,6 +4,7 @@ import os
 import requests
 import csv
 from datetime import datetime
+from urllib.parse import quote
 from dateutil.relativedelta import relativedelta
 
 from db import (
@@ -16,6 +17,7 @@ from db import (
     fetch_inbox_project,
     fetch_inbox_tasks,
     fetch_project_detail_rows,
+    fetch_task_for_note,
     fetch_student_log_rows,
     fetch_student_summary_rows,
     get_db,
@@ -40,6 +42,7 @@ from sync import (
     normalize_imported_tasks,
     parse_sync_payload,
     update_snapshot,
+    upsert_imported_task_note,
 )
 from task_parser import (
     build_quick_task_payload,
@@ -55,6 +58,23 @@ from task_parser import (
 
 app = Flask(__name__)  # ← これが最重要
 
+SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", "musestudio")
+
+
+def scrapbox_page_url(title):
+    page_name = (title or "").strip()
+    if not page_name:
+        return None
+    return f"https://scrapbox.io/{SCRAPBOX_PROJECT}/{quote(page_name, safe='')}"
+
+
+@app.context_processor
+def inject_scrapbox_helpers():
+    return {
+        "scrapbox_page_url": scrapbox_page_url,
+        "scrapbox_base_url": f"https://scrapbox.io/{SCRAPBOX_PROJECT}/",
+    }
+
 
 # =========================================================
 # Student Data Loading
@@ -63,7 +83,7 @@ def load_students():
     url = "https://docs.google.com/spreadsheets/d/14syTM70RCLc7UQZcK9btrU8PgsaPVKTDYhGhDvIkkao/export?format=csv"
 
     try:
-        res = requests.get(url)
+        res = requests.get(url, timeout=5)
         res.encoding = "utf-8"
 
         f = StringIO(res.text)
@@ -460,6 +480,7 @@ def build_project_detail_context(project_id, task_id_filter):
 
         return {
             "project": project,
+            "projects": fetch_all_projects(c),
             "tasks": attach_related_notes(all_tasks, notes_by_task_id),
             "overdue_tasks": attach_related_notes(
                 classified["overdue_tasks"], notes_by_task_id
@@ -523,6 +544,7 @@ def inbox_view():
 def move_task():
     task_id = request.form["task_id"]
     new_project_id = request.form["project_id"]
+    next_url = request.form.get("next")
 
     conn = get_db()
     c = conn.cursor()
@@ -531,7 +553,7 @@ def move_task():
     conn.commit()
     conn.close()
 
-    return redirect("/inbox")
+    return redirect(next_url or "/inbox")
 
 
 @app.route("/update_task", methods=["POST"])
@@ -790,21 +812,36 @@ def merge_tasks():
 
 @app.route("/add_note", methods=["POST"])
 def add_note():
-    title = request.form["title"]
-    content = request.form["content"]
+    title = request.form.get("title", "").strip()
+    content = request.form.get("content", "").strip()
     project_id = request.form["project_id"]
     student_id = normalize_student_id_value(request.form.get("student_id"))
     task_id = request.form.get("task_id") or None
-    scrapbox_url = request.form["scrapbox_url"]
+    scrapbox_url = request.form.get("scrapbox_url", "").strip()
+    next_url = request.form.get("next")
 
     conn = get_db()
     c = conn.cursor()
+
+    task = fetch_task_for_note(c, task_id) if task_id else None
+    if task:
+        title = title or task["title"]
+        project_id = task["project_id"] or project_id
+        student_id = student_id if student_id is not None else task["student_id"]
+        scrapbox_url = scrapbox_url or scrapbox_page_url(task["title"])
+    else:
+        task_id = None
+        scrapbox_url = scrapbox_url or scrapbox_page_url(title)
+
+    if not title:
+        conn.close()
+        return "title is required", 400
 
     insert_note(c, title, content, project_id, student_id, task_id, scrapbox_url)
     conn.commit()
     conn.close()
 
-    return redirect("/project/" + project_id)
+    return redirect(next_url or "/project/" + str(project_id))
 
 
 @app.route("/quick_add", methods=["POST"])
@@ -843,7 +880,8 @@ def import_tasks():
     normalized_items, _ = normalize_imported_tasks(data, c, STUDENTS_DATA)
 
     for t in normalized_items:
-        insert_imported_task(c, t)
+        task_id = insert_imported_task(c, t)
+        upsert_imported_task_note(c, task_id, t)
 
     conn.commit()
     conn.close()
@@ -961,6 +999,7 @@ def sync_apply_selected():
             item for item in diff.get("archive", [])
             if get_key(item) in selected_archive
         ]
+        filtered_diff["unchanged"] = []
 
         created, updated, archived, updated_task_ids = apply_sync_diff(c, filtered_diff)
 

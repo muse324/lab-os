@@ -249,9 +249,24 @@ def fetch_inbox_tasks(cursor, inbox_id):
     ).fetchall()
 
 
+def fetch_task_for_note(cursor, task_id):
+    return cursor.execute(
+        """
+        SELECT id, title, project_id, student_id
+        FROM tasks
+        WHERE id=?
+        """,
+        (task_id,),
+    ).fetchone()
+
+
 def move_task_to_project(cursor, task_id, new_project_id):
     cursor.execute(
         "UPDATE tasks SET project_id=? WHERE id=?",
+        (new_project_id, task_id),
+    )
+    cursor.execute(
+        "UPDATE notes SET project_id=? WHERE task_id=?",
         (new_project_id, task_id),
     )
 
@@ -583,6 +598,7 @@ def fetch_project_detail_rows(cursor, project_id, task_id_filter=None):
     tasks = cursor.execute(
         """
         SELECT id AS task_id, title, status, deadline, priority, archived,
+               project_id,
                original_deadline, sync_key, source_type, source_updated_at,
                source_url, scrapbox_url, student_id
         FROM tasks
@@ -667,6 +683,7 @@ def insert_imported_task(cursor, task):
             int(task.get("archived", 0)),
         ),
     )
+    return cursor.lastrowid
 
 
 def fetch_export_tasks_for_chatgpt(cursor):

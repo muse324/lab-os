@@ -30,24 +30,63 @@
             if (typeof StudentTooltipModule !== "undefined") {
                 StudentTooltipModule.bind(document);
             }
+
+            const initialNoteTaskId = new URLSearchParams(window.location.search).get("note_task_id");
+            if (initialNoteTaskId) {
+                const taskSelect = document.querySelector('select[name="task_id"]');
+                if (taskSelect) {
+                    for (const option of taskSelect.options) {
+                        if (option.value === initialNoteTaskId) {
+                            openNoteFormForTask(option.value, option.dataset.title || option.textContent.trim());
+                            break;
+                        }
+                    }
+                }
+            }
         });
+
+        const scrapboxBaseUrl = {{ scrapbox_base_url|tojson|safe }};
+
+        function buildScrapboxPageUrl(title) {
+            const pageName = (title || "").trim();
+            if (!pageName) return "";
+            return scrapboxBaseUrl + encodeURIComponent(pageName);
+        }
+
+        function syncNoteFormWithTask(taskId, taskTitle, forceOverwrite) {
+            const titleInput = document.querySelector('form[action="/add_note"] input[name="title"]');
+            const scrapboxInput = document.querySelector('form[action="/add_note"] input[name="scrapbox_url"]');
+            const title = (taskTitle || "").trim();
+
+            if (titleInput && (forceOverwrite || !titleInput.value)) {
+                titleInput.value = title;
+            }
+            if (scrapboxInput && (forceOverwrite || !scrapboxInput.value)) {
+                scrapboxInput.value = buildScrapboxPageUrl(title);
+            }
+        }
+
+        function syncNoteFormWithSelectedTask(forceOverwrite = false) {
+            const taskSelect = document.querySelector('select[name="task_id"]');
+            if (!taskSelect) return;
+            const selected = taskSelect.selectedOptions[0];
+            if (!selected || !selected.value) return;
+            syncNoteFormWithTask(selected.value, selected.dataset.title || selected.textContent, forceOverwrite);
+        }
 
         function openNoteFormForTask(taskId, taskTitle) {
             const taskSelect = document.querySelector('select[name="task_id"]');
             const titleInput = document.querySelector('form[action="/add_note"] input[name="title"]');
             const contentInput = document.querySelector('form[action="/add_note"] textarea[name="content"]');
-            const scrapboxInput = document.querySelector('form[action="/add_note"] input[name="scrapbox_url"]');
 
             if (taskSelect) {
                 taskSelect.value = String(taskId);
             }
-            if (titleInput && !titleInput.value) {
-                titleInput.value = `【${taskTitle}】`;
-            }
+            syncNoteFormWithTask(taskId, taskTitle, true);
             if (contentInput && !contentInput.value) {
                 contentInput.focus();
-            } else if (scrapboxInput) {
-                scrapboxInput.focus();
+            } else if (titleInput) {
+                titleInput.focus();
             }
 
             const noteHeading = Array.from(document.querySelectorAll('h3')).find(el => el.textContent.includes('メモ追加'));
@@ -56,7 +95,7 @@
             }
         }
     </script>
-    {% from "components/task_item.html" import edit_form, task_actions %}
+    {% from "components/task_item.html" import edit_form, task_actions, task_project_move with context %}
 
 
 <h1>{{ project["name"] }}</h1>
@@ -155,6 +194,7 @@
             </label>
             <button type="submit">更新</button>
         </form>
+        {{ task_project_move(t, projects) }}
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
                 関連ノート:
@@ -197,6 +237,7 @@
             </label>
             <button type="submit">更新</button>
         </form>
+        {{ task_project_move(t, projects) }}
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
                 関連ノート:
@@ -219,7 +260,7 @@
 {% for t in future_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false, show_move=true, projects=projects) }}
         <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
@@ -243,7 +284,7 @@
 {% for t in anytime_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false, show_move=true, projects=projects) }}
         <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
@@ -267,7 +308,7 @@
 {% for t in done_tasks %}
     <li class="task-title-scope">
         {% if t["priority"] == "high" %}🔥{% endif %}
-        {{ task_actions(t, show_done=true, show_update=true, is_done=false) }}
+        {{ task_actions(t, show_done=true, show_update=true, is_done=false, show_move=true, projects=projects) }}
         <button type="button" onclick='openNoteFormForTask({{ t["task_id"] }}, {{ t["title"]|tojson }})' style="margin-left:6px; font-size:0.85em;">＋ノート</button>
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
@@ -297,6 +338,7 @@
         <a href="/project/{{ project["id"] }}?task_id={{ t["task_id"] }}">[履歴]</a>
         {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
         <small>（{{ t["archive_reason"] }}）</small>
+        {{ task_project_move(t, projects) }}
         {% if t["related_notes"] %}
             <div style="margin:4px 0 0 1.5em; font-size:0.92em; color:#555;">
                 関連ノート:
@@ -356,6 +398,9 @@
                             📝 {{ n["title"] }}
                         {% endif %}
                         <small style="color:#666; margin-left:6px;">{{ n["created_at"] }}</small>
+                        {% if n["content"] %}
+                            <div style="margin-top:3px; color:#333; white-space:pre-wrap;">{{ n["content"] }}</div>
+                        {% endif %}
                     </li>
                 {% endfor %}
             </ul>
@@ -392,6 +437,40 @@
 <hr>
 
 <h3>メモ追加</h3>
+
+<form action="/add_note" method="post" id="taskNoteForm" style="margin-bottom:18px;">
+    <input type="hidden" name="project_id" value="{{ project["id"] }}">
+    <input type="hidden" name="student_id" value="{{ request.args.get('student_id', '') }}">
+    <input type="hidden" name="next" value="/project/{{ project["id"] }}">
+
+    <div style="margin-bottom:6px;">
+        <label>
+            紐づけタスク:
+            <select name="task_id" onchange="syncNoteFormWithSelectedTask(true)">
+                <option value="">未紐づけ</option>
+                {% for t in tasks %}
+                <option value="{{ t["task_id"] }}" data-title="{{ t["title"] }}">
+                    #{{ t["task_id"] }} {{ t["title"] }}{% if t["deadline_display"] %} [{{ t["deadline_display"] }}]{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+
+    <div style="margin-bottom:6px;">
+        <input name="title" placeholder="ノートタイトル" style="width:360px;" required>
+    </div>
+
+    <div style="margin-bottom:6px;">
+        <textarea name="content" rows="5" cols="72" placeholder="詳細・ノート"></textarea>
+    </div>
+
+    <div style="margin-bottom:6px;">
+        <input name="scrapbox_url" placeholder="Scrapbox URL" style="width:520px;">
+    </div>
+
+    <button type="submit">ノート追加</button>
+</form>
 
 <a href="/projects">← Projects</a><br>
 <a href="/">← Dashboard</a>
