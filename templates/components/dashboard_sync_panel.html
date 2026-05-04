@@ -15,16 +15,16 @@
       <button
         type="button"
         onclick="exportDelta()"
-        title="前回同期から変わったタスクだけを、GPTへ渡すためのメモとして下の作業メモ欄へ入れます"
+        title="前回同期から変わったもののうち、GPTメモリへ戻す必要がある戦略・構造・優先判断の差分だけを下の作業メモ欄へ入れます"
       >
-        変更分をGPT用メモ欄へ
+        GPTへ戻す変更分をメモ欄へ
       </button>
       <button
         type="button"
         onclick="exportDeltaJson()"
-        title="前回同期から変わったタスクだけを、GPT確認用のJSONとして下の作業メモ欄へ入れます"
+        title="GPTメモリ最小化方針に沿って抽出した変更分だけをJSONとして下の作業メモ欄へ入れます"
       >
-        変更分JSONをGPT用メモ欄へ
+        GPTへ戻す変更分JSONをメモ欄へ
       </button>
       <button
         type="button"
@@ -32,6 +32,13 @@
         title="作業メモ欄の内容を、GPTへ貼るためにクリップボードへコピーします"
       >
         作業メモをGPTへコピー
+      </button>
+      <button
+        type="button"
+        onclick="markGptDeltaExported()"
+        title="GPTへ変更分を貼って反映した後、現在のOS状態を次回差分出力の基準として保存します"
+      >
+        GPT反映済みにする
       </button>
     </div>
   </section>

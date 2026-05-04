@@ -538,6 +538,28 @@
     form.submit();
   };
 
+  SyncModule.markGptDeltaExported = async function () {
+    const confirmed = confirm(
+      "現在のOS状態を、次回のOS→GPT変更分出力の基準として保存します。GPTへ反映済みの場合だけ実行してください。",
+    );
+
+    if (!confirmed) return;
+
+    const res = await ApiModule.postForm("/mark_gpt_delta_exported", {});
+    const data = await res.json();
+
+    if (!res.ok) {
+      setSyncResultText(
+        `OS → GPT: 反映済み記録に失敗しました: ${data.error || res.statusText}`,
+      );
+      return;
+    }
+
+    setSyncResultText(
+      `OS → GPT: 現在状態を差分基準として保存しました（${data.snapshot_items}件）。`,
+    );
+  };
+
   async function runDeploy(event) {
     event.preventDefault();
 
@@ -591,20 +613,24 @@
     const res = await ApiModule.get("/export_delta_for_gpt");
     const data = await res.json();
     const prompt = buildDeltaPrompt();
-    const body = formatDeltaForGPT(data.delta);
+    const body = formatDeltaForGPT(data);
 
     document.getElementById("memoInput").value = prompt + "\n\n" + body;
-    setSyncResultText("OS → GPT: 変更分をGPT用の作業メモ欄へ入れました。");
+    setSyncResultText(
+      "OS → GPT: GPTメモリへ戻す必要がある変更分だけを作業メモ欄へ入れました。",
+    );
   };
 
   ExportModule.exportDeltaJson = async function () {
     const res = await ApiModule.get("/export_delta_for_gpt");
     const data = await res.json();
     const prompt = buildDeltaJsonPrompt();
-    const body = JSON.stringify(data.delta, null, 2);
+    const body = JSON.stringify(data, null, 2);
 
     document.getElementById("memoInput").value = prompt + "\n\n" + body;
-    setSyncResultText("OS → GPT: 変更分JSONをGPT用の作業メモ欄へ入れました。");
+    setSyncResultText(
+      "OS → GPT: GPTメモリ最小化方針に沿った変更分JSONを作業メモ欄へ入れました。",
+    );
   };
 
   function buildFullMemoPrompt() {
@@ -619,131 +645,157 @@
 
   function buildDeltaPrompt() {
     return [
-      "あなたはタスク管理アシスタントです。",
-      "以下の差分情報をもとに、既存のタスク一覧を更新してください。",
+      "以下は研究室運営OSからGPTメモリに戻す必要がある変更分だけです。",
+      "GPTメモリは、意思決定に必要な最小構造だけを保持してください。",
       "",
-      "【ルール】",
-      "- [追加] は新規タスクとして追加する",
-      "- [更新] は既存タスクを更新する（タイトルが一致するもの）",
-      "- [削除] は該当タスクを削除またはアーカイブ扱いにする",
+      "【保持するもの】",
+      "- 戦略（practice + articulation）",
+      "- 優先ピラー",
+      "- 研究室運営OSの構造",
+      "- 学生マネジメント方針",
+      "- 年度業務構造",
       "",
-      "出力は、更新後のタスク一覧を簡潔に整理した形式で提示してください。",
+      "【保持しないもの】",
+      "- タスク詳細、期限、担当、状態の実行管理",
+      "- 学生個別ログ、研究アイデア、実装詳細ログ、外部参照、完了業務ログ",
+      "",
+      "【反映ルール】",
+      "- memory_action=upsert_gpt_memory はGPTメモリの判断・戦略・構造へ反映する",
+      "- memory_action=remove_from_gpt_memory はScrapbox退避後、GPTメモリ上のactive項目から外す",
+      "- omitted_summary は外部化済み件数として扱い、個別内容は記憶しない",
+      "",
+      "出力は、GPTメモリ更新案だけを簡潔に提示してください。",
     ].join("\n");
   }
 
   function buildDeltaJsonPrompt() {
     return [
-      "あなたはタスク管理アシスタントです。",
-      "以下は変更差分のJSONです。",
-      "sync_key を同一タスク識別子として扱い、既存タスク一覧を更新してください。",
+      "以下は研究室運営OSからGPTメモリに戻す必要がある変更分JSONです。",
+      "GPTメモリは、意思決定に必要な最小構造だけを保持してください。",
       "",
       "【ルール】",
-      "- added は新規追加",
-      "- updated は既存タスク更新",
-      "- deleted は削除またはアーカイブ扱い",
-      "- updated.changes の field / old / new を優先して反映する",
-      "- タイトルではなく sync_key を優先して照合する",
+      "- delta.added / delta.updated / delta.deleted だけを反映対象にする",
+      "- memory_action=upsert_gpt_memory はGPTメモリの判断・戦略・構造へ反映する",
+      "- memory_action=remove_from_gpt_memory はGPTメモリ上のactive項目から外す",
+      "- omitted_summary は保持しない。件数確認だけに使う",
+      "- sync_key は同一項目識別子として扱う",
       "",
-      "出力は、更新後のタスク一覧を簡潔に整理した形式で提示してください。",
+      "出力は、GPTメモリ更新案だけを簡潔に提示してください。",
     ].join("\n");
   }
 
-  function formatDeltaForGPT(delta) {
+  function formatDeltaForGPT(payload) {
+    const data = payload?.delta ? payload : { delta: payload || {} };
+    const delta = data.delta || {};
     const lines = [];
     const added = delta.added || delta.create || [];
     const updated = delta.updated || delta.update || [];
     const deleted = delta.deleted || delta.archive || [];
 
+    lines.push("[GPTメモリ最小化 差分]");
+
+    if (data.source_counts && data.included_counts) {
+      lines.push(
+        `- 元差分: 追加${data.source_counts.added || 0} / 更新${
+          data.source_counts.updated || 0
+        } / 削除${data.source_counts.deleted || 0}`,
+      );
+      lines.push(
+        `- GPTへ戻す差分: 追加${data.included_counts.added || 0} / 更新${
+          data.included_counts.updated || 0
+        } / 削除${data.included_counts.deleted || 0}`,
+      );
+    }
+
+    if (data.baseline && !data.baseline.has_snapshot) {
+      lines.push(
+        "- 注意: 同期スナップショットが未作成のため、現在のsync_key付きタスクを初回差分として判定しています。",
+      );
+    }
+
+    if (data.omitted_summary) {
+      const osOnly = data.omitted_summary.os_only;
+      const scrapboxArchive = data.omitted_summary.scrapbox_archive;
+      lines.push("[GPTへ戻さないもの]");
+      lines.push(`- OS保持: ${osOnly?.count || 0}件 (${osOnly?.reason || ""})`);
+      lines.push(
+        `- Scrapbox退避/削除: ${scrapboxArchive?.count || 0}件 (${
+          scrapboxArchive?.reason || ""
+        })`,
+      );
+    }
+
+    if (!added.length && !updated.length && !deleted.length) {
+      lines.push("");
+      lines.push("GPTメモリに戻す必要がある変更分はありません。");
+      return lines.join("\n");
+    }
+
     if (added.length) {
       lines.push("[追加]");
       added.forEach((t) => {
-        const title = t.title || "（無題）";
-        lines.push(`- ${title} [sync_key: ${t.sync_key || "unknown"}]`);
-        lines.push(
-          `    ${UtilsModule.fieldLabel(
-            "deadline",
-          )}: ${UtilsModule.formatValue(t.deadline)}`,
-        );
-        lines.push(
-          `    ${UtilsModule.fieldLabel(
-            "priority",
-          )}: ${UtilsModule.formatValue(t.priority)}`,
-        );
-        lines.push(
-          `    ${UtilsModule.fieldLabel(
-            "status",
-          )}: ${UtilsModule.formatValue(t.status)}`,
-        );
-        lines.push(
-          `    ${UtilsModule.fieldLabel(
-            "project_id",
-          )}: ${UtilsModule.formatValue(t.project_id)}`,
-        );
-        lines.push(
-          `    ${UtilsModule.fieldLabel(
-            "student_id",
-          )}: ${UtilsModule.formatValue(t.student_id)}`,
-        );
+        lines.push(...formatMemoryDeltaItem(t));
       });
     }
 
     if (updated.length) {
       lines.push("\n[更新]");
       updated.forEach((t) => {
-        const title = t.title || "（無題）";
-        lines.push(`- ${title} [sync_key: ${t.sync_key || "unknown"}]`);
-
-        if (t.changes && t.changes.length) {
-          t.changes.forEach((change) => {
-            lines.push(
-              `    ${UtilsModule.fieldLabel(
-                change.field,
-              )}: ${UtilsModule.formatValue(
-                change.old,
-              )} → ${UtilsModule.formatValue(change.new)}`,
-            );
-          });
-        }
+        lines.push(...formatMemoryDeltaItem(t));
       });
     }
 
     if (deleted.length) {
       lines.push("\n[削除]");
       deleted.forEach((t) => {
-        const title = typeof t === "string" ? t : t.title || "（無題）";
-        const syncKey = typeof t === "string" ? t : t.sync_key || "unknown";
-        lines.push(`- ${title} [sync_key: ${syncKey}]`);
-        if (typeof t !== "string") {
-          lines.push(
-            `    ${UtilsModule.fieldLabel(
-              "deadline",
-            )}: ${UtilsModule.formatValue(t.deadline)}`,
-          );
-          lines.push(
-            `    ${UtilsModule.fieldLabel(
-              "priority",
-            )}: ${UtilsModule.formatValue(t.priority)}`,
-          );
-          lines.push(
-            `    ${UtilsModule.fieldLabel(
-              "status",
-            )}: ${UtilsModule.formatValue(t.status)}`,
-          );
-          lines.push(
-            `    ${UtilsModule.fieldLabel(
-              "project_id",
-            )}: ${UtilsModule.formatValue(t.project_id)}`,
-          );
-          lines.push(
-            `    ${UtilsModule.fieldLabel(
-              "student_id",
-            )}: ${UtilsModule.formatValue(t.student_id)}`,
-          );
-        }
+        lines.push(...formatMemoryDeltaItem(t));
       });
     }
 
     return lines.join("\n");
+  }
+
+  function formatMemoryDeltaItem(t) {
+    const lines = [];
+    const title = typeof t === "string" ? t : t.title || "（無題）";
+    const syncKey = typeof t === "string" ? "unknown" : t.sync_key || "unknown";
+
+    lines.push(`- ${title} [sync_key: ${syncKey}]`);
+
+    if (typeof t === "string") return lines;
+
+    lines.push(`    category: ${UtilsModule.formatValue(t.category)}`);
+    lines.push(`    action: ${UtilsModule.formatValue(t.memory_action)}`);
+    lines.push(`    reason: ${UtilsModule.formatValue(t.reason)}`);
+
+    if (t.project) {
+      lines.push(`    project: ${UtilsModule.formatValue(t.project)}`);
+    }
+
+    if (t.priority) {
+      lines.push(`    priority: ${UtilsModule.formatValue(t.priority)}`);
+    }
+
+    if (t.status) {
+      lines.push(`    status: ${UtilsModule.formatValue(t.status)}`);
+    }
+
+    if (t.deadline) {
+      lines.push(`    deadline: ${UtilsModule.formatValue(t.deadline)}`);
+    }
+
+    if (t.changes && t.changes.length) {
+      t.changes.forEach((change) => {
+        const label = UtilsModule.fieldLabel(change.field);
+        const oldValue = UtilsModule.formatValue(change.old);
+        const newValue = change.new_project
+          ? `${UtilsModule.formatValue(change.new)} (${change.new_project})`
+          : UtilsModule.formatValue(change.new);
+        lines.push(`    ${label}: ${oldValue} → ${newValue}`);
+      });
+    }
+
+    return lines;
   }
 
   function toggleInlineEdit(button) {
@@ -788,6 +840,7 @@
   window.applySync = SyncModule.applySync;
   window.applySelectedSync = SyncModule.applySelectedSync;
   window.importTasks = SyncModule.importTasks;
+  window.markGptDeltaExported = SyncModule.markGptDeltaExported;
   window.exportMemo = ExportModule.exportMemo;
   window.exportDelta = ExportModule.exportDelta;
   window.exportDeltaJson = ExportModule.exportDeltaJson;

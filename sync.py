@@ -18,6 +18,121 @@ SYNC_FIELDS = [
     "source_url",
 ]
 
+GPT_MEMORY_POLICY = {
+    "purpose": "GPTメモリを意思決定に必要な最小構造のみに圧縮する",
+    "gpt_keeps": [
+        "戦略（practice + articulation）",
+        "優先ピラー",
+        "研究室運営OSの構造",
+        "学生マネジメント方針",
+        "年度業務構造",
+    ],
+    "externalized_to_scrapbox": [
+        "知識蓄積",
+        "思考ログ",
+        "研究メモ",
+        "参照情報",
+        "完了業務ログ",
+    ],
+    "externalized_to_os": [
+        "タスク管理",
+        "期限管理",
+        "担当管理",
+        "状態管理",
+        "学生個別ログ",
+    ],
+}
+
+LAB_OS_TERMS = [
+    "研究室運営os",
+    "lab os",
+    "dashboard",
+    "ダッシュボード",
+    "同期",
+    "ui",
+    "タスク統合",
+    "構造",
+]
+
+STRATEGY_TERMS = [
+    "戦略",
+    "方針",
+    "構造",
+    "設計",
+    "優先",
+    "ピラー",
+    "practice",
+    "articulation",
+    "役割分担",
+    "再構成",
+    "シナリオ",
+    "論点整理",
+    "テーマ整理",
+    "申請枠",
+    "研究テーマ",
+]
+
+STUDENT_MANAGEMENT_TERMS = [
+    "学生マネジメント",
+    "学生指導",
+    "研究室配属",
+    "指導方針",
+    "育成",
+    "面談設計",
+    "指導設計",
+]
+
+ANNUAL_WORK_TERMS = [
+    "年度",
+    "授業",
+    "委員会",
+    "評価",
+    "ac審査",
+    "科研費",
+    "kakenhi",
+    "報告書",
+    "申請",
+    "審査",
+    "業務構造",
+]
+
+PRIORITY_PILLAR_TERMS = [
+    "研究",
+    "論文",
+    "投稿",
+    "科研",
+    "審査",
+    "申請",
+    "評価",
+    "年度",
+    "運営",
+    "授業",
+]
+
+LAB_OS_STRUCTURE_TERMS = [
+    "構造",
+    "設計",
+    "方針",
+    "同期",
+    "統合",
+    "dashboard",
+    "ダッシュボード",
+    "ui",
+    "学生ログ",
+    "プロジェクト詳細",
+]
+
+STUDENT_POLICY_TERMS = [
+    "方針",
+    "体制",
+    "設計",
+    "管理",
+    "マネジメント",
+    "限定",
+    "優先",
+    "計画",
+]
+
 
 def parse_sync_payload(raw_json):
     raw_json = normalize_quotes(raw_json)
@@ -39,14 +154,166 @@ def parse_sync_payload(raw_json):
     return data, None
 
 
+def _project_lookup(cursor):
+    rows = cursor.execute("SELECT id, name, type FROM projects").fetchall()
+    return {row["id"]: {"name": row["name"], "type": row["type"]} for row in rows}
+
+
+def _enrich_project_fields(item, projects):
+    project_id = item.get("project_id")
+    project = projects.get(project_id)
+    if not project:
+        return item
+
+    item.setdefault("project_name", project["name"])
+    item.setdefault("project_type", project["type"])
+    return item
+
+
+def _match_text(*values):
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def _contains_any(text, terms):
+    return any(term.lower() in text for term in terms)
+
+
+def _is_completed(item):
+    return str(item.get("status") or "").lower() in {"done", "completed", "complete"}
+
+
+def _changed_to_done(item):
+    for change in item.get("changes", []) or []:
+        if (
+            change.get("field") == "status"
+            and str(change.get("new") or "").lower() == "done"
+        ):
+            return True
+    return False
+
+
+def _classify_gpt_memory_item(kind, item):
+    title_text = _match_text(item.get("title"))
+    project_text = _match_text(item.get("project_name"), item.get("project_type"))
+    text = _match_text(title_text, project_text)
+    completion_delta = _changed_to_done(item) or kind == "deleted"
+    completed = _is_completed(item) or completion_delta
+
+    if _is_completed(item) and not completion_delta:
+        return {
+            "include": False,
+            "omit_bucket": "scrapbox_archive",
+            "reason": "完了済みはScrapbox退避後に削除",
+        }
+
+    category = None
+    reason = None
+
+    if _contains_any(project_text, LAB_OS_TERMS) and _contains_any(
+        title_text, LAB_OS_STRUCTURE_TERMS
+    ):
+        category = "lab_os_structure"
+        reason = "研究室運営OSの構造に関わる変更"
+    elif _contains_any(text, STUDENT_MANAGEMENT_TERMS) and _contains_any(
+        title_text, STUDENT_POLICY_TERMS
+    ):
+        category = "student_management_policy"
+        reason = "学生マネジメント方針に関わる変更"
+    elif _contains_any(title_text, STRATEGY_TERMS):
+        category = "strategy"
+        reason = "戦略・設計・構造に関わる変更"
+    elif _contains_any(title_text, ANNUAL_WORK_TERMS):
+        category = "annual_work_structure"
+        reason = "年度業務構造に関わる変更"
+    elif item.get("priority") == "high" and _contains_any(
+        title_text, PRIORITY_PILLAR_TERMS
+    ):
+        category = "priority_pillar"
+        reason = "優先順位判断に影響する変更"
+
+    if not category:
+        omit_bucket = "scrapbox_archive" if completed else "os_only"
+        return {
+            "include": False,
+            "omit_bucket": omit_bucket,
+            "reason": (
+                "完了済み・ログ系はScrapbox退避後に削除"
+                if completed
+                else "期限・担当・状態は研究室運営OSに保持"
+            ),
+        }
+
+    return {
+        "include": True,
+        "category": category,
+        "reason": reason,
+        "action": "remove_from_gpt_memory" if completed else "upsert_gpt_memory",
+    }
+
+
+def _memory_change(change, item):
+    field = change.get("field")
+    old = change.get("old")
+    new = change.get("new")
+
+    if field == "project_id":
+        return {
+            "field": field,
+            "old": old,
+            "new": new,
+            "new_project": item.get("project_name"),
+        }
+
+    return {"field": field, "old": old, "new": new}
+
+
+def _minimal_gpt_memory_item(kind, item, classification):
+    minimal = {
+        "sync_key": item.get("sync_key"),
+        "title": item.get("title"),
+        "project": item.get("project_name"),
+        "project_type": item.get("project_type"),
+        "status": item.get("status"),
+        "priority": item.get("priority"),
+        "category": classification["category"],
+        "memory_action": classification["action"],
+        "reason": classification["reason"],
+    }
+
+    if item.get("deadline"):
+        minimal["deadline"] = item.get("deadline")
+
+    if item.get("changes"):
+        minimal["changes"] = [
+            _memory_change(change, item)
+            for change in item.get("changes", [])
+            if change.get("field")
+            in {"title", "project_id", "priority", "status", "deadline"}
+        ]
+
+    return minimal
+
+
 def build_delta(cursor):
     current_rows = cursor.execute(
         """
-        SELECT sync_key, title, deadline, project_id, student_id, priority, status
+        SELECT
+            tasks.sync_key AS sync_key,
+            tasks.title AS title,
+            tasks.deadline AS deadline,
+            tasks.project_id AS project_id,
+            tasks.student_id AS student_id,
+            tasks.priority AS priority,
+            tasks.status AS status,
+            projects.name AS project_name,
+            projects.type AS project_type
         FROM tasks
-        WHERE archived=0 AND sync_key IS NOT NULL
-    """
+        LEFT JOIN projects ON tasks.project_id = projects.id
+        WHERE tasks.archived=0 AND tasks.sync_key IS NOT NULL
+        """
     ).fetchall()
+
+    projects = _project_lookup(cursor)
 
     current = {row["sync_key"]: row for row in current_rows}
     snapshot = {
@@ -66,6 +333,7 @@ def build_delta(cursor):
 
     for sync_key, row in current.items():
         row_dict = dict(row)
+        _enrich_project_fields(row_dict, projects)
 
         if sync_key not in snapshot:
             delta["added"].append(row_dict)
@@ -85,19 +353,69 @@ def build_delta(cursor):
 
     for sync_key, old in snapshot.items():
         if sync_key not in current:
-            delta["deleted"].append(
-                {
-                    "sync_key": sync_key,
-                    "title": old["title"],
-                    "deadline": old["deadline"],
-                    "project_id": old["project_id"],
-                    "student_id": old["student_id"],
-                    "priority": old["priority"],
-                    "status": old["status"],
-                }
-            )
+            item = {
+                "sync_key": sync_key,
+                "title": old["title"],
+                "deadline": old["deadline"],
+                "project_id": old["project_id"],
+                "student_id": old["student_id"],
+                "priority": old["priority"],
+                "status": old["status"],
+            }
+            _enrich_project_fields(item, projects)
+            delta["deleted"].append(item)
 
     return delta
+
+
+def build_gpt_memory_delta(cursor):
+    raw_delta = build_delta(cursor)
+    filtered = {"added": [], "updated": [], "deleted": []}
+    omitted_counts = {"os_only": 0, "scrapbox_archive": 0}
+
+    for kind in ("added", "updated", "deleted"):
+        for item in raw_delta.get(kind, []):
+            classification = _classify_gpt_memory_item(kind, item)
+            if classification["include"]:
+                filtered[kind].append(
+                    _minimal_gpt_memory_item(kind, item, classification)
+                )
+            else:
+                omitted_counts[classification["omit_bucket"]] += 1
+
+    source_counts = {
+        "added": len(raw_delta.get("added", [])),
+        "updated": len(raw_delta.get("updated", [])),
+        "deleted": len(raw_delta.get("deleted", [])),
+    }
+    included_counts = {
+        "added": len(filtered["added"]),
+        "updated": len(filtered["updated"]),
+        "deleted": len(filtered["deleted"]),
+    }
+    snapshot_count = cursor.execute("SELECT COUNT(*) FROM sync_snapshot").fetchone()[0]
+
+    return {
+        "mode": "gpt_memory_minimal_delta",
+        "policy": GPT_MEMORY_POLICY,
+        "delta": filtered,
+        "source_counts": source_counts,
+        "included_counts": included_counts,
+        "omitted_summary": {
+            "os_only": {
+                "count": omitted_counts["os_only"],
+                "reason": "期限・担当・状態・学生個別ログは研究室運営OSに保持",
+            },
+            "scrapbox_archive": {
+                "count": omitted_counts["scrapbox_archive"],
+                "reason": "完了済み・ログ・参照はScrapbox退避後にGPTメモリから削除",
+            },
+        },
+        "baseline": {
+            "has_snapshot": snapshot_count > 0,
+            "snapshot_items": snapshot_count,
+        },
+    }
 
 
 def generate_sync_key(item):
@@ -457,7 +775,7 @@ def update_snapshot(cursor):
         INSERT INTO sync_snapshot
         SELECT sync_key, title, deadline, project_id, student_id, priority, status, datetime('now')
         FROM tasks
-        WHERE archived=0
+        WHERE archived=0 AND sync_key IS NOT NULL
     """
     )
 

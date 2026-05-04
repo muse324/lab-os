@@ -33,7 +33,7 @@ from db import (
 )
 from sync import (
     apply_sync_diff,
-    build_delta,
+    build_gpt_memory_delta,
     build_sync_diff,
     build_sync_preview_response,
     fetch_recent_sync_history,
@@ -1085,11 +1085,26 @@ def export_delta_for_gpt():
     conn = get_db()
     c = conn.cursor()
 
-    delta = build_delta(c)
+    payload = build_gpt_memory_delta(c)
 
     conn.close()
 
-    return jsonify({"delta": delta})
+    return jsonify(payload)
+
+
+@app.route("/mark_gpt_delta_exported", methods=["POST"])
+def mark_gpt_delta_exported():
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        update_snapshot(c)
+        conn.commit()
+        snapshot_items = c.execute("SELECT COUNT(*) FROM sync_snapshot").fetchone()[0]
+    finally:
+        conn.close()
+
+    return jsonify({"status": "ok", "snapshot_items": snapshot_items})
 
 
 @app.route("/edit_task_title", methods=["POST"])
