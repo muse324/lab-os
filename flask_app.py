@@ -216,7 +216,7 @@ def export_snapshot_scrapbox(project_name):
 
 def format_all_snapshots_as_scrapbox(snapshots):
     lines = []
-    lines.append("[Lab OS 全体状態]")
+    lines.append("Lab OS Active")
     lines.append("")
     lines.append("[プロジェクト横断 snapshot]")
     lines.append("")
