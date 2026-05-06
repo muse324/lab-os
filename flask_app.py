@@ -511,7 +511,7 @@ def build_project_detail_context(project_id, task_id_filter):
 # =========================================================
 @app.route("/")
 def home():
-    months = max(0, min(request.args.get("months", 3, type=int), 12))
+    months = max(0, min(request.args.get("months", 0, type=int), 12))
     context = build_home_context(months)
 
     return render_template(

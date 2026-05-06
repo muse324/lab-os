@@ -153,7 +153,7 @@
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const params = new URLSearchParams(window.location.search);
-    const fallback = container.dataset.selectedMonths || "3";
+    const fallback = container.dataset.selectedMonths || "0";
     const selected = parseInt(params.get("months") ?? fallback, 10);
     const links = container.querySelectorAll("a[data-months]");
 
