@@ -30,6 +30,7 @@ from db import (
     mark_task_done,
     merge_project_tasks,
     move_task_to_project,
+    move_tasks_to_project,
     update_task_deadline_and_priority,
     update_task_title as update_task_title_row,
 )
@@ -59,6 +60,7 @@ from task_parser import (
 app = Flask(__name__)  # ← これが最重要
 
 SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", "musestudio")
+DEADLINE_SOON_DAYS = 3
 
 
 def scrapbox_page_url(title):
@@ -306,8 +308,23 @@ def format_history_rows(rows):
 
 
 # --- Apply deadline/formatting for tasks ---
+def is_deadline_soon(deadline, today=None):
+    if not deadline:
+        return False
+
+    try:
+        deadline_date = datetime.strptime(deadline, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+
+    today = today or datetime.now().date()
+    days_left = (deadline_date - today).days
+    return 0 <= days_left <= DEADLINE_SOON_DAYS
+
+
 def apply_format(rows):
     result = []
+    today = datetime.now().date()
     for r in rows:
         d = dict(r)
 
@@ -320,6 +337,12 @@ def apply_format(rows):
             d["original_deadline_display"] = format_date_jp(d["original_deadline"])
         else:
             d["original_deadline_display"] = None
+
+        d["deadline_soon"] = (
+            d.get("status") != "done"
+            and int(d.get("archived") or 0) == 0
+            and is_deadline_soon(d.get("deadline"), today)
+        )
 
         result.append(d)
 
@@ -533,7 +556,7 @@ def inbox_view():
         conn.close()
         return "Inbox not found"
 
-    tasks = fetch_inbox_tasks(c, inbox["id"])
+    tasks = apply_format(fetch_inbox_tasks(c, inbox["id"]))
     projects = fetch_all_projects(c)
     conn.close()
 
@@ -554,6 +577,28 @@ def move_task():
     conn.close()
 
     return redirect(next_url or "/inbox")
+
+
+@app.route("/move_tasks", methods=["POST"])
+def move_tasks():
+    task_ids = request.form.getlist("task_ids")
+    new_project_id = request.form.get("project_id")
+    next_url = request.form.get("next")
+
+    if not new_project_id:
+        return "project_id is required", 400
+
+    if not task_ids:
+        return redirect(next_url or "/")
+
+    conn = get_db()
+    c = conn.cursor()
+
+    move_tasks_to_project(c, task_ids, new_project_id)
+    conn.commit()
+    conn.close()
+
+    return redirect(next_url or "/")
 
 
 @app.route("/update_task", methods=["POST"])
@@ -783,7 +828,9 @@ def merge_tasks():
     merged_title = request.form.get("merged_title")
     merged_deadline = request.form.get("merged_deadline")
     merged_priority = "high" if request.form.get("merged_priority") == "high" else None
-    next_url = request.form.get("next") or (f"/project/{project_id}" if project_id else "/")
+    next_url = request.form.get("next") or (
+        f"/project/{project_id}" if project_id else "/"
+    )
 
     if not project_id or not keep_task_id:
         return "project_id and keep_task_id are required", 400
@@ -919,7 +966,6 @@ def sync_preview():
     return jsonify(response)
 
 
-
 @app.route("/sync_apply", methods=["POST"])
 def sync_apply():
     raw_json = request.form.get("json", "")
@@ -988,15 +1034,14 @@ def sync_apply_selected():
 
         filtered_diff = dict(diff)
         filtered_diff["create"] = [
-            item for item in diff.get("create", [])
-            if get_key(item) in selected_create
+            item for item in diff.get("create", []) if get_key(item) in selected_create
         ]
         filtered_diff["update"] = [
-            item for item in diff.get("update", [])
-            if get_key(item) in selected_update
+            item for item in diff.get("update", []) if get_key(item) in selected_update
         ]
         filtered_diff["archive"] = [
-            item for item in diff.get("archive", [])
+            item
+            for item in diff.get("archive", [])
             if get_key(item) in selected_archive
         ]
         filtered_diff["unchanged"] = []
@@ -1167,9 +1212,6 @@ def edit_task_title():
     return redirect(next_url or "/")
 
 
-
-
-
 @app.route("/gpt_memory_sync", methods=["POST"])
 def gpt_memory_sync():
     data = request.get_json(force=True, silent=True) or {}
@@ -1225,15 +1267,18 @@ def gpt_memory_sync():
     for t in normalized_tasks:
         print(f"[TASK] {t.get('title')} | {t.get('project')} | {t.get('deadline')}")
 
-    return jsonify({
-        "status": "ok",
-        "created": created,
-        "updated": updated,
-        "updated_task_ids": updated_task_ids,
-        "archived": archived,
-        "task_count": len(normalized_tasks),
-        "tasks": normalized_tasks  # ← UI確認用
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "created": created,
+            "updated": updated,
+            "updated_task_ids": updated_task_ids,
+            "archived": archived,
+            "task_count": len(normalized_tasks),
+            "tasks": normalized_tasks,  # ← UI確認用
+        }
+    )
+
 
 def normalize_project_name(text):
     aliases = {
@@ -1252,12 +1297,15 @@ def normalize_project_name(text):
 
     return None, None
 
+
 def normalize_task(task):
-    joined = " ".join([
-        str(task.get("title", "")),
-        str(task.get("project", "")),
-        str(task.get("notes", "")),
-    ])
+    joined = " ".join(
+        [
+            str(task.get("title", "")),
+            str(task.get("project", "")),
+            str(task.get("notes", "")),
+        ]
+    )
 
     project, original = normalize_project_name(joined)
 
@@ -1273,14 +1321,17 @@ def normalize_task(task):
 
     return task
 
+
 import re
 import hashlib
+
 
 def extract_tasks_from_gpt_memory(text):
     tasks = local_generate_sync_tasks(text, STUDENTS_DATA)
 
     # 空タイトル除去
     return [t for t in tasks if t.get("title")]
+
 
 def make_sync_key(task):
     base = "|".join(
@@ -1291,7 +1342,6 @@ def make_sync_key(task):
     digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:10]
 
     return f"gpt_{digest}"
-
 
 
 @app.route("/gpt_memory_sync_test")

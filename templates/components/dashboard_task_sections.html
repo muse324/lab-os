@@ -1,28 +1,63 @@
-{% from "components/task_item.html" import edit_form, render_task_item with context %}
-
-<hr />
-
-<h2>⚠ 期限切れ</h2>
-<ul>
-  {% for t in overdue %}
-    {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red", show_move=true, projects=projects, show_note_link=true) }}
-  {% endfor %}
-</ul>
-
-<hr />
-
-<h2>今日のタスク</h2>
-<ul>
-  {% for t in today %}
-    {{ render_task_item(t, show_deadline=true, allow_update=false, color="color:orange", show_move=true, projects=projects, show_note_link=true) }}
-  {% endfor %}
-</ul>
-
-<hr />
+{% from "components/task_item.html" import edit_form, render_task_item, bulk_project_move_form with context %}
 
 {# グローバル: プロジェクト別色分け用マップ #}
 {% set ns = namespace(color_map={}) %}
 {% set colors = ['#4caf50','#2196f3','#ff9800','#9c27b0','#f44336','#009688'] %}
+
+{% macro project_move_header(project, project_id, color, form_id, projects) %}
+  <div
+    style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
+  >
+    <strong style="color: {{ color }}">
+      {% if project_id %}
+        <a href="/project/{{ project_id }}" style="color: {{ color }};"
+          >{{ project or "未分類" }}</a
+        >
+      {% else %}
+        {{ project or "未分類" }}
+      {% endif %}
+    </strong>
+    {{ bulk_project_move_form(form_id, projects, project_id) }}
+  </div>
+{% endmacro %}
+
+<hr />
+
+<h2>⚠ 期限切れ</h2>
+{% for project, items in overdue|groupby("project_name") %}
+  {% if project not in ns.color_map %}
+    {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
+  {% endif %}
+  {% set color = ns.color_map[project] %}
+  {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
+  {% set form_id = "bulk-overdue-" ~ loop.index %}
+  {{ project_move_header(project, project_id, color, form_id, projects) }}
+  <ul>
+    {% for t in items %}
+      {{ render_task_item(t, show_deadline=true, allow_update=true, color="color:red", show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
+    {% endfor %}
+  </ul>
+{% endfor %}
+
+<hr />
+
+<h2>今日のタスク</h2>
+{% for project, items in today|groupby("project_name") %}
+  {% if project not in ns.color_map %}
+    {% set _ = ns.color_map.update({project: colors[ns.color_map|length % colors|length]}) %}
+  {% endif %}
+  {% set color = ns.color_map[project] %}
+  {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
+  {% set form_id = "bulk-today-" ~ loop.index %}
+  {{ project_move_header(project, project_id, color, form_id, projects) }}
+  <ul>
+    {% for t in items %}
+      {{ render_task_item(t, show_deadline=true, allow_update=false, color="color:orange", show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
+    {% endfor %}
+  </ul>
+{% endfor %}
+
+<hr />
 
 <h2>
   今後の締切（プロジェクト別）
@@ -49,22 +84,11 @@
   {% endif %}
   {% set color = ns.color_map[project] %}
   {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
-  <div
-    style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
-  >
-    <strong style="color: {{ color }}">
-      {% if project_id %}
-        <a href="/project/{{ project_id }}" style="color: {{ color }};"
-          >{{ project or "未分類" }}</a
-        >
-      {% else %}
-        {{ project or "未分類" }}
-      {% endif %}
-    </strong>
-  </div>
+  {% set form_id = "bulk-future-" ~ loop.index %}
+  {{ project_move_header(project, project_id, color, form_id, projects) }}
   <ul>
     {% for t in items %}
-      {{ render_task_item(t, show_deadline=true, allow_update=false, show_move=true, projects=projects, show_note_link=true) }}
+      {{ render_task_item(t, show_deadline=true, allow_update=false, show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
     {% endfor %}
   </ul>
 {% endfor %}
@@ -76,22 +100,11 @@
   {% endif %}
   {% set color = ns.color_map[project] %}
   {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
-  <div
-    style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
-  >
-    <strong style="color: {{ color }}">
-      {% if project_id %}
-        <a href="/project/{{ project_id }}" style="color: {{ color }};"
-          >{{ project or "未分類" }}</a
-        >
-      {% else %}
-        {{ project or "未分類" }}
-      {% endif %}
-    </strong>
-  </div>
+  {% set form_id = "bulk-anytime-" ~ loop.index %}
+  {{ project_move_header(project, project_id, color, form_id, projects) }}
   <ul>
     {% for t in items %}
-      {{ render_task_item(t, show_deadline=true, allow_update=true, show_move=true, projects=projects, show_note_link=true) }}
+      {{ render_task_item(t, show_deadline=true, allow_update=true, show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
     {% endfor %}
   </ul>
 {% endfor %}

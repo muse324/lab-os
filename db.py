@@ -1,9 +1,16 @@
 import os
+import re
 import sqlite3
+from datetime import date, timedelta
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "db.sqlite3")
+
+RESEARCH_NOTE_TITLE_RE = re.compile(
+    r"^第(?P<index>\d+)回(?P<space>\s*)研究のおと（note\.com）を執筆する$"
+)
+PRACTICE_TITLE_RE = re.compile(r"^.+を練習する$")
 
 
 def get_db():
@@ -261,14 +268,31 @@ def fetch_task_for_note(cursor, task_id):
 
 
 def move_task_to_project(cursor, task_id, new_project_id):
+    move_tasks_to_project(cursor, [task_id], new_project_id)
+
+
+def move_tasks_to_project(cursor, task_ids, new_project_id):
+    normalized_task_ids = []
+    for task_id in task_ids:
+        try:
+            normalized_task_ids.append(int(task_id))
+        except (TypeError, ValueError):
+            continue
+
+    if not normalized_task_ids:
+        return 0
+
+    placeholders = ",".join(["?"] * len(normalized_task_ids))
+    params = [new_project_id] + normalized_task_ids
     cursor.execute(
-        "UPDATE tasks SET project_id=? WHERE id=?",
-        (new_project_id, task_id),
+        f"UPDATE tasks SET project_id=? WHERE id IN ({placeholders})",
+        params,
     )
     cursor.execute(
-        "UPDATE notes SET project_id=? WHERE task_id=?",
-        (new_project_id, task_id),
+        f"UPDATE notes SET project_id=? WHERE task_id IN ({placeholders})",
+        params,
     )
+    return len(normalized_task_ids)
 
 
 def update_task_deadline_and_priority(
@@ -461,8 +485,102 @@ def insert_task(cursor, title, project_id, deadline, priority, student_id, statu
     )
 
 
+def build_next_research_note_title(title):
+    match = RESEARCH_NOTE_TITLE_RE.match(title or "")
+    if not match:
+        return None
+
+    next_index = int(match.group("index")) + 1
+    return f"第{next_index}回{match.group('space')}研究のおと（note.com）を執筆する"
+
+
+def next_week_wednesday_from(completed_on):
+    next_monday = completed_on + timedelta(days=7 - completed_on.weekday())
+    return next_monday + timedelta(days=2)
+
+
+def next_weekday_from(completed_on):
+    next_day = completed_on + timedelta(days=1)
+    while next_day.weekday() >= 5:
+        next_day += timedelta(days=1)
+    return next_day
+
+
+def _active_task_exists(cursor, title, project_id, student_id):
+    return cursor.execute(
+        """
+        SELECT id
+        FROM tasks
+        WHERE title=?
+          AND COALESCE(project_id, -1)=COALESCE(?, -1)
+          AND COALESCE(student_id, -1)=COALESCE(?, -1)
+          AND archived=0
+          AND status != 'done'
+        LIMIT 1
+        """,
+        (title, project_id, student_id),
+    ).fetchone()
+
+
+def generate_next_research_note_task(cursor, task):
+    next_title = build_next_research_note_title(task["title"])
+    if not next_title:
+        return
+
+    if _active_task_exists(cursor, next_title, task["project_id"], task["student_id"]):
+        return
+
+    insert_task(
+        cursor,
+        next_title,
+        task["project_id"],
+        next_week_wednesday_from(date.today()).isoformat(),
+        task["priority"],
+        task["student_id"],
+        status="future",
+    )
+
+
+def generate_next_practice_task(cursor, task):
+    title = task["title"]
+    if not PRACTICE_TITLE_RE.match(title or ""):
+        return
+
+    if _active_task_exists(cursor, title, task["project_id"], task["student_id"]):
+        return
+
+    insert_task(
+        cursor,
+        title,
+        task["project_id"],
+        next_weekday_from(date.today()).isoformat(),
+        task["priority"],
+        task["student_id"],
+        status="future",
+    )
+
+
+def generate_completion_triggered_tasks(cursor, task):
+    generate_next_research_note_task(cursor, task)
+    generate_next_practice_task(cursor, task)
+
+
 def mark_task_done(cursor, task_id):
+    task = cursor.execute(
+        """
+        SELECT title, status, project_id, priority, student_id
+        FROM tasks
+        WHERE id=?
+        """,
+        (task_id,),
+    ).fetchone()
+
+    if not task:
+        return
+
     cursor.execute("UPDATE tasks SET status='done' WHERE id=?", (task_id,))
+    if task["status"] != "done":
+        generate_completion_triggered_tasks(cursor, task)
 
 
 def _first_nonempty(*values):

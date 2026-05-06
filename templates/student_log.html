@@ -16,7 +16,8 @@
     <ul>
       {% for t in tasks %}
         <li>
-          {% if t["priority"] == "high" %}🔥{% endif %}
+          {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
+          {% if t["priority"] == "high" %}❣️{% endif %}
           {{
             task_actions(
                 t,

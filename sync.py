@@ -3,7 +3,12 @@ import os
 import re
 from urllib.parse import quote
 
-from db import fetch_all_projects, fetch_inbox_project_id, insert_note
+from db import (
+    fetch_all_projects,
+    fetch_inbox_project_id,
+    generate_completion_triggered_tasks,
+    insert_note,
+)
 from task_parser import normalize_quotes, resolve_project_id_from_text
 
 
@@ -753,6 +758,12 @@ def apply_task_update(cursor, task_id, normalized, changes):
         f"UPDATE tasks SET {', '.join(update_fields)} WHERE id=?",
         values,
     )
+    if any(
+        change["field"] == "status"
+        and str(change["new"] or "").lower() == "done"
+        for change in task_changes
+    ):
+        generate_completion_triggered_tasks(cursor, normalized)
 
 
 def build_sync_diff(imported_items, cursor, students_data=None):

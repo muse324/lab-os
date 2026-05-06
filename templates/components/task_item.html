@@ -34,13 +34,36 @@
   <input type="hidden" name="next" value="{{ next_url_value() }}" />
   <select name="project_id" style="max-width:180px;">
     {% for p in projects %}
-    <option value="{{ p[" id"] }}" {% if current_project_id and p["id"]==current_project_id %}selected{% endif %}>
+    <option value="{{ p['id'] }}" {% if current_project_id and p["id"]==current_project_id %}selected{% endif %}>
       {{ p["name"] }}
     </option>
     {% endfor %}
   </select>
   <button type="submit">移動</button>
 </form>
+{% endif %}
+{% endmacro %}
+
+{% macro bulk_project_move_form(form_id, projects=none, current_project_id=none) %}
+{% if projects %}
+<form id="{{ form_id }}" action="/move_tasks" method="post" style="display:inline; margin-left:8px;">
+  <input type="hidden" name="next" value="{{ next_url_value() }}" />
+  <select name="project_id" style="max-width:180px;">
+    {% for p in projects %}
+    <option value="{{ p['id'] }}" {% if current_project_id and p["id"]==current_project_id %}selected{% endif %}>
+      {{ p["name"] }}
+    </option>
+    {% endfor %}
+  </select>
+  <button type="submit">選択を移動</button>
+</form>
+{% endif %}
+{% endmacro %}
+
+{% macro task_bulk_move_checkbox(t, form_id=none) %}
+{% if form_id %}
+<input type="checkbox" name="task_ids" value="{{ task_id_value(t)|trim }}" form="{{ form_id }}" title="一括移動で選択"
+  style="margin-right:4px;" />
 {% endif %}
 {% endmacro %}
 
@@ -58,7 +81,7 @@
   関連ノート:
   {% for n in t["related_notes"] %}
   {% if n["scrapbox_url"] %}
-  <a href="{{ n[" scrapbox_url"] }}" target="_blank" rel="noopener noreferrer">📝 {{ n["title"] }}</a>
+  <a href="{{ n['scrapbox_url'] }}" target="_blank" rel="noopener noreferrer">📝 {{ n["title"] }}</a>
   {% else %}
   <span>📝 {{ n["title"] }}</span>
   {% endif %}
@@ -80,7 +103,7 @@
   <span class="inline-edit-title">{{ t["title"] }}</span>
   {% endif %}
 
-  <input type="text" name="title" value="{{ t[" title"] }}" class="inline-edit-input"
+  <input type="text" name="title" value="{{ t['title'] }}" class="inline-edit-input"
     style="display:none; width:120px;" />
   <button type="button" class="inline-edit-toggle" onclick="toggleInlineEdit(this)">
     変更
@@ -98,7 +121,7 @@
   <input type="hidden" name="task_id" value="{{ task_id }}" />
   <input type="hidden" name="next" value="{{ next_url_value() }}" />
   <input type="hidden" name="priority_present" value="1" />
-  <input type="date" name="deadline" value="{{ t[" deadline"] if t["deadline"] is defined and t["deadline"] else ""
+  <input type="date" name="deadline" value="{{ t['deadline'] if t["deadline"] is defined and t["deadline"] else ""
     }}" />
   <label>
     <input type="checkbox" name="priority" value="high" {% if t["priority"]=="high" %}checked{% endif %} />
@@ -118,13 +141,15 @@
 {% endmacro %}
 
 {% macro render_task_item(t, show_deadline=true, allow_update=false, color="", show_move=false, projects=none,
-show_note_link=false) %}
-<li data-task-id="{{ t[" task_id"] }}" class="task-title-scope" style="{{ color }}">
+show_note_link=false, bulk_move_form_id=none) %}
+<li data-task-id="{{ task_id_value(t)|trim }}" class="task-title-scope" style="{{ color }}">
+  {{ task_bulk_move_checkbox(t, bulk_move_form_id) }}
   {% if show_deadline and t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
   {% if show_deadline and t["original_deadline_display"] and t["original_deadline_display"] != t["deadline_display"] %}
   (元: {{ t["original_deadline_display"] }})
   {% endif %}
-  {% if t["priority"] == "high" %}🔥{% endif %}
+  {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
+  {% if t["priority"] == "high" %}❣️{% endif %}
   {{ task_actions(t, show_done=true, show_update=allow_update, is_done=false, show_move=show_move, projects=projects) }}
   {% if show_note_link %}
   {{ task_note_link(t) }}
