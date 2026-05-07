@@ -3,6 +3,7 @@ from flask import Flask, render_template, request, redirect, jsonify
 import os
 import requests
 import csv
+from difflib import get_close_matches
 from datetime import datetime
 from urllib.parse import quote
 from dateutil.relativedelta import relativedelta
@@ -19,6 +20,7 @@ from db import (
     fetch_project_detail_rows,
     fetch_task_for_note,
     fetch_student_log_rows,
+    fetch_student_research_theme_overrides,
     fetch_student_summary_rows,
     get_db,
     get_today_str,
@@ -33,6 +35,7 @@ from db import (
     move_tasks_to_project,
     update_task_deadline_and_priority,
     update_task_title as update_task_title_row,
+    upsert_student_research_theme,
 )
 from sync import (
     apply_sync_diff,
@@ -59,21 +62,85 @@ from task_parser import (
 
 app = Flask(__name__)  # ← これが最重要
 
-SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", "musestudio")
+MUSELAB_PROJECT = os.getenv("MUSELAB_PROJECT", "muselab")
+MUSESTUDIO_PROJECT = os.getenv("MUSESTUDIO_PROJECT", "musestudio")
+SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", MUSESTUDIO_PROJECT)
+SCRAPBOX_SEARCH_TIMEOUT = 2
+SCRAPBOX_TITLE_CACHE = {}
 DEADLINE_SOON_DAYS = 3
 
 
-def scrapbox_page_url(title):
+def normalize_scrapbox_page_title(title):
+    return " ".join((title or "").strip().split())
+
+
+def scrapbox_project_page_url(project, title):
     page_name = (title or "").strip()
     if not page_name:
         return None
-    return f"https://scrapbox.io/{SCRAPBOX_PROJECT}/{quote(page_name, safe='')}"
+    return f"https://scrapbox.io/{project}/{quote(page_name, safe='')}"
+
+
+def scrapbox_page_url(title):
+    return scrapbox_project_page_url(SCRAPBOX_PROJECT, title)
+
+
+def fetch_scrapbox_search_pages(project, query):
+    url = f"https://scrapbox.io/api/pages/{quote(project, safe='')}/search/query"
+    res = requests.get(url, params={"q": query}, timeout=SCRAPBOX_SEARCH_TIMEOUT)
+    res.raise_for_status()
+    data = res.json()
+    if not isinstance(data, dict):
+        return []
+    return data.get("pages", [])
+
+
+def resolve_scrapbox_page_title(project, title):
+    normalized_title = normalize_scrapbox_page_title(title)
+    if not normalized_title:
+        return ""
+
+    cache_key = (project, normalized_title)
+    if cache_key in SCRAPBOX_TITLE_CACHE:
+        return SCRAPBOX_TITLE_CACHE[cache_key]
+
+    resolved_title = normalized_title
+    candidate_titles = []
+
+    for query in (f'"{normalized_title}"', normalized_title):
+        try:
+            pages = fetch_scrapbox_search_pages(project, query)
+        except Exception:
+            continue
+
+        for page in pages:
+            page_title = page.get("title")
+            if not page_title:
+                continue
+            candidate_titles.append(page_title)
+            if normalize_scrapbox_page_title(page_title) == normalized_title:
+                SCRAPBOX_TITLE_CACHE[cache_key] = page_title
+                return page_title
+
+    unique_candidates = list(dict.fromkeys(candidate_titles))
+    close_matches = get_close_matches(
+        normalized_title,
+        unique_candidates,
+        n=1,
+        cutoff=0.9,
+    )
+    if close_matches:
+        resolved_title = close_matches[0]
+
+    SCRAPBOX_TITLE_CACHE[cache_key] = resolved_title
+    return resolved_title
 
 
 @app.context_processor
 def inject_scrapbox_helpers():
     return {
         "scrapbox_page_url": scrapbox_page_url,
+        "scrapbox_project_page_url": scrapbox_project_page_url,
         "scrapbox_base_url": f"https://scrapbox.io/{SCRAPBOX_PROJECT}/",
     }
 
@@ -86,6 +153,7 @@ def load_students():
 
     try:
         res = requests.get(url, timeout=5)
+        res.raise_for_status()
         res.encoding = "utf-8"
 
         f = StringIO(res.text)
@@ -97,12 +165,16 @@ def load_students():
             name = row.get("氏名")
             nickname = row.get("呼び名")
             student_id = row.get("学籍番号")
+            grade = row.get("学年") or ""
+            research_theme = row.get("研究テーマ") or ""
 
             if name and name != "橋田光代":
                 students.append(
                     {
                         "name": name,
                         "student_id": int(student_id) if student_id else None,
+                        "grade": grade,
+                        "research_theme": research_theme,
                     }
                 )
 
@@ -111,6 +183,8 @@ def load_students():
                     {
                         "name": nickname,
                         "student_id": int(student_id) if student_id else None,
+                        "grade": grade,
+                        "research_theme": research_theme,
                     }
                 )
 
@@ -631,6 +705,12 @@ def students_index():
     # 学籍番号昇順（上級生→下級生）
     students.sort(key=lambda x: x["student_id"])
 
+    conn = get_db()
+    c = conn.cursor()
+    theme_overrides = fetch_student_research_theme_overrides(c)
+    conn.commit()
+    conn.close()
+
     student_rows = []
     seen_student_ids = set()
     for s in students:
@@ -638,9 +718,76 @@ def students_index():
         if student_id in seen_student_ids:
             continue
         seen_student_ids.add(student_id)
-        student_rows.append({"name": s["name"], "student_id": student_id})
 
-    return render_template("students.html", students=student_rows)
+        theme_override = theme_overrides.get(student_id)
+        research_theme = (s.get("research_theme") or "").strip()
+        theme_source = "sheet"
+        muselab_page_title = research_theme
+        if theme_override:
+            research_theme = theme_override["research_theme"]
+            muselab_page_title = theme_override["muselab_page_title"] or research_theme
+            theme_source = "local"
+
+        student_rows.append(
+            {
+                "name": s["name"],
+                "student_id": student_id,
+                "grade": s.get("grade", ""),
+                "research_theme": research_theme,
+                "theme_source": theme_source,
+                "muselab_url": scrapbox_project_page_url(
+                    MUSELAB_PROJECT, muselab_page_title
+                ),
+                "musestudio_url": scrapbox_project_page_url(
+                    MUSESTUDIO_PROJECT, s["name"]
+                ),
+            }
+        )
+
+    return render_template(
+        "students.html",
+        students=student_rows,
+        reload_status=request.args.get("reload"),
+        theme_status=request.args.get("theme"),
+    )
+
+
+@app.route("/students/reload", methods=["POST"])
+def reload_students():
+    global STUDENTS_DATA
+
+    students = load_students()
+    if not students:
+        return redirect("/students?reload=failed")
+
+    STUDENTS_DATA = students
+    return redirect("/students?reload=ok")
+
+
+@app.route("/students/research_theme", methods=["POST"])
+def update_student_research_theme():
+    student_id = normalize_student_id_value(request.form.get("student_id"))
+    research_theme = request.form.get("research_theme", "").strip()
+
+    if student_id is None:
+        return redirect("/students?theme=failed")
+
+    muselab_page_title = ""
+    if research_theme:
+        muselab_page_title = resolve_scrapbox_page_title(MUSELAB_PROJECT, research_theme)
+
+    conn = get_db()
+    c = conn.cursor()
+    upsert_student_research_theme(
+        c,
+        student_id,
+        research_theme,
+        muselab_page_title,
+    )
+    conn.commit()
+    conn.close()
+
+    return redirect(f"/students?theme=ok#student-{student_id}")
 
 
 @app.route("/student_log")

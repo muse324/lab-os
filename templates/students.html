@@ -3,19 +3,194 @@
 
 <head>
   <title>学生ログ</title>
+  <style>
+    body {
+      color: #222;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+      margin: 32px;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin: 20px 0;
+    }
+
+    .toolbar {
+      align-items: center;
+      display: flex;
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .reload-button {
+      background: #f8f8f8;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      color: #222;
+      cursor: pointer;
+      font: inherit;
+      padding: 6px 12px;
+    }
+
+    .reload-button:hover {
+      background: #eee;
+    }
+
+    .notice {
+      color: #555;
+      font-size: 0.9em;
+      margin: 0;
+    }
+
+    .notice.error {
+      color: #b00020;
+    }
+
+    .theme-form {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      min-width: 360px;
+    }
+
+    .theme-input {
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font: inherit;
+      padding: 5px 8px;
+      width: 100%;
+    }
+
+    .theme-save-button {
+      background: #f8f8f8;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      color: #222;
+      cursor: pointer;
+      flex: 0 0 auto;
+      font: inherit;
+      padding: 5px 10px;
+    }
+
+    .theme-save-button:hover {
+      background: #eee;
+    }
+
+    .theme-source {
+      color: #777;
+      font-size: 0.82em;
+      margin-top: 3px;
+    }
+
+    .scrapbox-links {
+      white-space: nowrap;
+    }
+
+    .scrapbox-links a {
+      margin-right: 8px;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #e5e5e5;
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #555;
+      font-size: 0.9em;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .student-id,
+    .student-grade {
+      white-space: nowrap;
+    }
+
+    .empty {
+      color: #999;
+    }
+  </style>
 </head>
 
 <body>
   <h1>学生ログ</h1>
   <p>学生名を選ぶと、関連タスク・メモ・締切変更履歴を確認できます。</p>
 
-  <ul>
-    {% for s in students %}
-    <li>
-      <a href="/student_log?student_id={{ s[" student_id"] }}&name={{ s["name"]|urlencode }}">{{ s["name"] }}</a>
-    </li>
-    {% endfor %}
-  </ul>
+  <div class="toolbar">
+    <form action="/students/reload" method="post">
+      <button class="reload-button" type="submit">Googleシートを読み込み直す</button>
+    </form>
+
+    {% if reload_status == "ok" %}
+    <p class="notice">Googleシートを読み込み直しました。</p>
+    {% elif reload_status == "failed" %}
+    <p class="notice error">Googleシートを読み込めませんでした。現在の一覧は保持しています。</p>
+    {% endif %}
+
+    {% if theme_status == "ok" %}
+    <p class="notice">研究テーマを保存しました。</p>
+    {% elif theme_status == "failed" %}
+    <p class="notice error">研究テーマを保存できませんでした。</p>
+    {% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>氏名</th>
+        <th>学籍番号</th>
+        <th>学年</th>
+        <th>研究テーマ</th>
+        <th>Scrapbox</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in students %}
+      <tr id="student-{{ s["student_id"] }}">
+        <td>
+          <a href="/student_log?student_id={{ s["student_id"] }}&name={{ s["name"]|urlencode }}">{{ s["name"] }}</a>
+        </td>
+        <td class="student-id">{{ s["student_id"] }}</td>
+        <td class="student-grade">
+          {% if s["grade"] %}
+          {{ s["grade"] }}
+          {% else %}
+          <span class="empty">-</span>
+          {% endif %}
+        </td>
+        <td>
+          <form class="theme-form" action="/students/research_theme" method="post">
+            <input type="hidden" name="student_id" value="{{ s["student_id"] }}">
+            <input
+              class="theme-input"
+              name="research_theme"
+              value="{{ s["research_theme"] }}"
+              placeholder="研究テーマ"
+            >
+            <button class="theme-save-button" type="submit">保存</button>
+          </form>
+          {% if s["theme_source"] == "local" %}
+          <div class="theme-source">このページで入力</div>
+          {% endif %}
+        </td>
+        <td class="scrapbox-links">
+          {% if s["muselab_url"] %}
+          <a href="{{ s["muselab_url"] }}" target="_blank" rel="noopener noreferrer">muselab</a>
+          {% else %}
+          <span class="empty">-</span>
+          {% endif %}
+          <a href="{{ s["musestudio_url"] }}" target="_blank" rel="noopener noreferrer">musestudio</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 
   <a href="/">← Dashboard</a>
 </body>

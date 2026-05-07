@@ -160,6 +160,8 @@ def init_db():
         """
     )
 
+    ensure_student_research_themes_table(c)
+
     # ===== deadline正規化（空文字→NULL） =====
     c.execute("UPDATE tasks SET deadline=NULL WHERE deadline=''")
     c.execute("UPDATE tasks SET original_deadline=NULL WHERE original_deadline=''")
@@ -168,6 +170,66 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def ensure_student_research_themes_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS student_research_themes (
+            student_id INTEGER PRIMARY KEY,
+            research_theme TEXT NOT NULL,
+            muselab_page_title TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def fetch_student_research_theme_overrides(cursor):
+    ensure_student_research_themes_table(cursor)
+    rows = cursor.execute(
+        """
+        SELECT student_id, research_theme, muselab_page_title
+        FROM student_research_themes
+        """
+    ).fetchall()
+    return {
+        row["student_id"]: {
+            "research_theme": row["research_theme"],
+            "muselab_page_title": row["muselab_page_title"],
+        }
+        for row in rows
+    }
+
+
+def upsert_student_research_theme(
+    cursor, student_id, research_theme, muselab_page_title
+):
+    ensure_student_research_themes_table(cursor)
+
+    research_theme = (research_theme or "").strip()
+    muselab_page_title = (muselab_page_title or "").strip()
+
+    if not research_theme:
+        cursor.execute(
+            "DELETE FROM student_research_themes WHERE student_id = ?",
+            (student_id,),
+        )
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO student_research_themes (
+            student_id, research_theme, muselab_page_title, updated_at
+        )
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(student_id) DO UPDATE SET
+            research_theme = excluded.research_theme,
+            muselab_page_title = excluded.muselab_page_title,
+            updated_at = excluded.updated_at
+        """,
+        (student_id, research_theme, muselab_page_title),
+    )
 
 
 def get_today_str(cursor):
