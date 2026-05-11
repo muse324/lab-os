@@ -6,20 +6,18 @@
         window.students = {{ students | tojson | safe }};
     </script>
     <script src="/static/js/student-modules.js"></script>
+    <script src="/static/js/scroll-state.js"></script>
 </head>
 <body>
     <script>
         // --- スクロール位置保存 ---
         window.addEventListener("beforeunload", () => {
-            localStorage.setItem("scrollY", window.scrollY);
+            LabOsScroll.saveScrollPosition();
         });
 
         window.addEventListener("load", () => {
-            const y = localStorage.getItem("scrollY");
-            if (y !== null) {
-                window.scrollTo(0, parseInt(y));
-                localStorage.removeItem("scrollY");
-            }
+            LabOsScroll.restoreScrollPosition();
+            LabOsScroll.bindTaskCompletionForms();
 
             // --- 学生リンク初期化 ---
             document.querySelectorAll("[data-task-id], .task-title-scope, .note-title-scope, .history-title-scope").forEach((el) => {
@@ -43,6 +41,8 @@
                     }
                 }
             }
+
+            initTaskMergeToggle();
         });
 
         const scrapboxBaseUrl = {{ scrapbox_base_url|tojson|safe }};
@@ -94,6 +94,31 @@
                 noteHeading.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
         }
+
+        const taskMergeVisibilityKey = "labOs.projectDetail.taskMergeVisible";
+
+        function setTaskMergeVisibility(isVisible) {
+            const panel = document.getElementById("taskMergePanel");
+            const button = document.getElementById("taskMergeToggleButton");
+            if (!panel || !button) return;
+
+            panel.hidden = !isVisible;
+            button.setAttribute("aria-expanded", String(isVisible));
+            button.textContent = isVisible ? "タスク統合を隠す" : "タスク統合を表示";
+            localStorage.setItem(taskMergeVisibilityKey, isVisible ? "1" : "0");
+        }
+
+        function initTaskMergeToggle() {
+            const button = document.getElementById("taskMergeToggleButton");
+            const panel = document.getElementById("taskMergePanel");
+            if (!button || !panel) return;
+
+            const isVisible = localStorage.getItem(taskMergeVisibilityKey) === "1";
+            setTaskMergeVisibility(isVisible);
+            button.addEventListener("click", () => {
+                setTaskMergeVisibility(panel.hidden);
+            });
+        }
     </script>
     {% from "components/task_item.html" import edit_form, task_actions, bulk_project_move_form, task_bulk_move_checkbox with context %}
 
@@ -118,8 +143,16 @@
     <button type="submit">追加</button>
 </form>
 
-<h2>タスク統合</h2>
-<form action="/merge_tasks" method="post">
+<div style="display:flex; align-items:center; gap:8px; margin-top:1em;">
+    <h2 style="margin:0;">タスク統合</h2>
+    <button
+        type="button"
+        id="taskMergeToggleButton"
+        aria-controls="taskMergePanel"
+        aria-expanded="false"
+    >タスク統合を表示</button>
+</div>
+<form action="/merge_tasks" method="post" id="taskMergePanel" hidden style="margin-top:8px;">
     <input type="hidden" name="project_id" value="{{ project["id"] }}">
     <input type="hidden" name="next" value="/project/{{ project["id"] }}">
 
@@ -172,7 +205,7 @@
 <h2>⚠ 期限切れ</h2>
 <ul>
 {% for t in overdue_tasks %}
-    <li class="task-title-scope" style="color:red;">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="color:red;">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}
@@ -219,7 +252,7 @@
 <h2>今日のタスク</h2>
 <ul>
 {% for t in today_tasks %}
-    <li class="task-title-scope" style="color:orange;">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="color:orange;">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}
@@ -263,7 +296,7 @@
 <h2>今後の〆切</h2>
 <ul>
 {% for t in future_tasks %}
-    <li class="task-title-scope">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}
@@ -289,7 +322,7 @@
 <h2>いつでも</h2>
 <ul>
 {% for t in anytime_tasks %}
-    <li class="task-title-scope">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}
@@ -315,7 +348,7 @@
 <h2>完了済み</h2>
 <ul>
 {% for t in done_tasks %}
-    <li class="task-title-scope">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}
@@ -341,7 +374,7 @@
 <h2>タスク（アーカイブ済み）</h2>
 <ul>
 {% for t in archived_tasks %}
-    <li class="task-title-scope" style="color:#888;">
+    <li data-task-id="{{ t["task_id"] }}" class="task-title-scope" style="color:#888;">
         {{ task_bulk_move_checkbox(t, "projectBulkMove") }}
         {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
         {% if t["priority"] == "high" %}❣️{% endif %}

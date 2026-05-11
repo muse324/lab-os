@@ -110,6 +110,11 @@
   };
 
   function restoreScrollPosition() {
+    if (window.LabOsScroll) {
+      window.LabOsScroll.restoreScrollPosition();
+      return;
+    }
+
     const y = localStorage.getItem("scrollY");
     if (y !== null) {
       window.scrollTo(0, parseInt(y, 10));
@@ -873,11 +878,18 @@
   }
 
   window.addEventListener("beforeunload", () => {
-    localStorage.setItem("scrollY", window.scrollY);
+    if (window.LabOsScroll) {
+      window.LabOsScroll.saveScrollPosition();
+    } else {
+      localStorage.setItem("scrollY", window.scrollY);
+    }
   });
 
   window.addEventListener("load", () => {
     restoreScrollPosition();
+    if (window.LabOsScroll) {
+      window.LabOsScroll.bindTaskCompletionForms();
+    }
     initStudentLinks();
   });
 
