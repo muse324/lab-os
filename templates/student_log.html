@@ -1,113 +1,149 @@
 <!doctype html>
 <html>
-  <head>
-    <title>学生ログ</title>
-  </head>
 
-  <body>
-    {% from "components/task_item.html" import task_actions with context %}
+<head>
+  <title>学生ログ</title>
+  <style>
+    .student-links a {
+      margin-right: 8px;
+    }
 
-    <h1>{{ student_name }} の研究指導ログ</h1>
-    <p><small>student_id: {{ student_id }}</small></p>
+    .scrapbox-text {
+      background: #f8f8f8;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      max-height: 480px;
+      overflow: auto;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
 
-    <p><a href="/students">← 学生一覧</a> | <a href="/">Dashboard</a></p>
+    .notice {
+      color: #777;
+    }
+  </style>
+</head>
 
-    <h2>関連タスク</h2>
-    <ul>
-      {% for t in tasks %}
-        <li>
-          {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
-          {% if t["priority"] == "high" %}❣️{% endif %}
-          {{
-            task_actions(
-                t,
-                show_done=t["status"] != "done" and not t["archived"],
-                show_update=not t["archived"],
-                is_done=t["status"] == "done"
-            )
-          }}
-          （{% if t["project_id"] %}
-            <a href="/project/{{ t['project_id'] }}">{{ t["project_name"] }}</a>
-          {% else %}
-            {{ t["project_name"] or "未分類" }}
-          {% endif %}）
-          {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
-          {% if t["status"] == "done" %}[完了]{% endif %}
-          {% if t["archived"] %}[アーカイブ]{% endif %}
-        </li>
+<body>
+  {% from "components/task_item.html" import task_actions with context %}
+
+  <h1>{{ student_name }} の研究指導ログ</h1>
+  <p><small>student_id: {{ student_id }}</small></p>
+
+  <p><a href="/students">← 学生一覧</a> | <a href="/">Dashboard</a></p>
+
+  <h2>Links</h2>
+  <p class="student-links">
+    {% for link_id, link in links.items() %}
+    <a href="{{ link[" url"] }}" {% if link["external"] %}target="_blank" rel="noopener noreferrer" {% endif %}>{{
+      link["label"] }}</a>
+    {% endfor %}
+  </p>
+
+
+
+  <h2>関連タスク</h2>
+  <ul>
+    {% for t in tasks %}
+    <li>
+      {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
+      {% if t["priority"] == "high" %}❣️{% endif %}
+      {{
+      task_actions(
+      t,
+      show_done=t["status"] != "done" and not t["archived"],
+      show_update=not t["archived"],
+      is_done=t["status"] == "done"
+      )
+      }}
+      （{% if t["project_id"] %}
+      <a href="/project/{{ t['project_id'] }}">{{ t["project_name"] }}</a>
       {% else %}
-        <li>関連タスクはありません。</li>
-      {% endfor %}
-    </ul>
+      {{ t["project_name"] or "未分類" }}
+      {% endif %}）
+      {% if t["deadline_display"] %}[{{ t["deadline_display"] }}]{% endif %}
+      {% if t["status"] == "done" %}[完了]{% endif %}
+      {% if t["archived"] %}[アーカイブ]{% endif %}
+    </li>
+    {% else %}
+    <li>関連タスクはありません。</li>
+    {% endfor %}
+  </ul>
 
-    <h2>関連メモ</h2>
-    <ul>
-      {% for n in notes %}
-        <li>
-          <b>{{ n["title"] }}</b>
-          （{% if n["project_id"] %}
-            <a href="/project/{{ n['project_id'] }}">{{ n["project_name"] }}</a>
-          {% else %}
-            {{ n["project_name"] or "未分類" }}
-          {% endif %}）<br />
-          {{ n["content"] }}<br />
-          <small>{{ n["created_at"] }}</small>
-          {% if n["scrapbox_url"] %}
-            <a
-              href="{{ n['scrapbox_url'] }}"
-              target="_blank"
-              rel="noopener noreferrer"
-              >Scrapbox</a
-            >
-          {% endif %}
-        </li>
+  <h2>ノート</h2>
+  <ul>
+    {% for n in notes %}
+    <li>
+      <b>{{ n["title"] }}</b>
+      （{% if n["project_id"] %}
+      <a href="/project/{{ n['project_id'] }}">{{ n["project_name"] }}</a>
       {% else %}
-        <li>関連メモはありません。</li>
-      {% endfor %}
-    </ul>
+      {{ n["project_name"] or "未分類" }}
+      {% endif %}）<br />
+      {{ n["content"] }}<br />
+      <small>{{ n["created_at"] }}</small>
+      {% if n["scrapbox_url"] %}
+      <a href="{{ n['scrapbox_url'] }}" target="_blank" rel="noopener noreferrer">Scrapbox</a>
+      {% endif %}
+    </li>
+    {% else %}
+    <li>ノートはありません。</li>
+    {% endfor %}
+  </ul>
 
-    <h2>締切変更履歴</h2>
-    <ul>
-      {% for h in history %}
-        <li>
-          <b>{{ h["task_title"] }}</b>
-          （{% if h["project_id"] %}
-            <a href="/project/{{ h['project_id'] }}">{{ h["project_name"] }}</a>
-          {% else %}
-            {{ h["project_name"] or "未分類" }}
-          {% endif %}）<br />
-          {% if h["old_deadline_display"] %}{{ h["old_deadline_display"] }}{% else %}未設定{% endif %}
-          →
-          {% if h["new_deadline_display"] %}{{ h["new_deadline_display"] }}{% else %}未設定{% endif %}
-          <small>({{ h["changed_at"] }})</small>
-        </li>
+  <h2>musestudio</h2>
+  {% if musestudio_text["text"] %}
+  <details open>
+    <summary>Scrapbox本文</summary>
+    <pre class="scrapbox-text">{{ musestudio_text["text"] }}</pre>
+  </details>
+  {% else %}
+  <p class="notice">Scrapbox本文は取得できませんでした。編集・確認は musestudio で行ってください。</p>
+  {% endif %}
+
+  <h2>締切変更履歴</h2>
+  <ul>
+    {% for h in history %}
+    <li>
+      <b>{{ h["task_title"] }}</b>
+      （{% if h["project_id"] %}
+      <a href="/project/{{ h['project_id'] }}">{{ h["project_name"] }}</a>
       {% else %}
-        <li>締切変更履歴はありません。</li>
-      {% endfor %}
-    </ul>
+      {{ h["project_name"] or "未分類" }}
+      {% endif %}）<br />
+      {% if h["old_deadline_display"] %}{{ h["old_deadline_display"] }}{% else %}未設定{% endif %}
+      →
+      {% if h["new_deadline_display"] %}{{ h["new_deadline_display"] }}{% else %}未設定{% endif %}
+      <small>({{ h["changed_at"] }})</small>
+    </li>
+    {% else %}
+    <li>締切変更履歴はありません。</li>
+    {% endfor %}
+  </ul>
 
-    <script>
-      function toggleInlineEdit(button) {
-        const form = button.closest(".inline-edit-form");
-        if (!form) return;
-        const titleSpan = form.querySelector(".inline-edit-title");
-        const titleInput = form.querySelector(".inline-edit-input");
-        if (!titleInput || !titleSpan) return;
-        const isEditing = titleInput.style.display !== "none";
-        if (!isEditing) {
-          titleSpan.style.display = "none";
-          titleInput.style.display = "inline-block";
-          button.textContent = "OK";
-          const strike = form.querySelector("s");
-          if (strike) {
-            strike.style.display = "none";
-          }
-          titleInput.focus();
-          titleInput.select();
-        } else {
-          form.submit();
+  <script>
+    function toggleInlineEdit(button) {
+      const form = button.closest(".inline-edit-form");
+      if (!form) return;
+      const titleSpan = form.querySelector(".inline-edit-title");
+      const titleInput = form.querySelector(".inline-edit-input");
+      if (!titleInput || !titleSpan) return;
+      const isEditing = titleInput.style.display !== "none";
+      if (!isEditing) {
+        titleSpan.style.display = "none";
+        titleInput.style.display = "inline-block";
+        button.textContent = "OK";
+        const strike = form.querySelector("s");
+        if (strike) {
+          strike.style.display = "none";
         }
+        titleInput.focus();
+        titleInput.select();
+      } else {
+        form.submit();
       }
-    </script>
-  </body>
+    }
+  </script>
+</body>
+
 </html>

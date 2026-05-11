@@ -84,11 +84,11 @@
       margin-top: 3px;
     }
 
-    .scrapbox-links {
+    .student-links {
       white-space: nowrap;
     }
 
-    .scrapbox-links a {
+    .student-links a {
       margin-right: 8px;
     }
 
@@ -147,14 +147,19 @@
         <th>学籍番号</th>
         <th>学年</th>
         <th>研究テーマ</th>
-        <th>Scrapbox</th>
+        <th>Links</th>
       </tr>
     </thead>
     <tbody>
       {% for s in students %}
+      {% set links = s.get("links") %}
       <tr id="student-{{ s["student_id"] }}">
         <td>
+          {% if links and links.get("os") %}
+          <a href="{{ links["os"]["url"] }}">{{ s["name"] }}</a>
+          {% else %}
           <a href="/student_log?student_id={{ s["student_id"] }}&name={{ s["name"]|urlencode }}">{{ s["name"] }}</a>
+          {% endif %}
         </td>
         <td class="student-id">{{ s["student_id"] }}</td>
         <td class="student-grade">
@@ -179,13 +184,25 @@
           <div class="theme-source">このページで入力</div>
           {% endif %}
         </td>
-        <td class="scrapbox-links">
-          {% if s["muselab_url"] %}
-          <a href="{{ s["muselab_url"] }}" target="_blank" rel="noopener noreferrer">muselab</a>
+        <td class="student-links">
+          {% if links %}
+          {% for link_id, link in links.items() %}
+          <a
+            href="{{ link["url"] }}"
+            {% if link["external"] %}target="_blank" rel="noopener noreferrer"{% endif %}
+          >{{ link["label"] }}</a>
           {% else %}
           <span class="empty">-</span>
-          {% endif %}
+          {% endfor %}
+          {% else %}
+          <a href="/student_log?student_id={{ s["student_id"] }}&name={{ s["name"]|urlencode }}">OSノート</a>
+          {% if s.get("musestudio_url") %}
           <a href="{{ s["musestudio_url"] }}" target="_blank" rel="noopener noreferrer">musestudio</a>
+          {% endif %}
+          {% if s.get("muselab_url") %}
+          <a href="{{ s["muselab_url"] }}" target="_blank" rel="noopener noreferrer">muselab</a>
+          {% endif %}
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

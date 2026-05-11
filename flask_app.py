@@ -1,5 +1,5 @@
 from io import StringIO
-from flask import Flask, render_template, request, redirect, jsonify
+from flask import Flask, render_template, request, redirect, jsonify, url_for
 import os
 import requests
 import csv
@@ -83,6 +83,79 @@ def scrapbox_project_page_url(project, title):
 
 def scrapbox_page_url(title):
     return scrapbox_project_page_url(SCRAPBOX_PROJECT, title)
+
+
+def scrapbox_request_headers():
+    cookie = os.getenv("SCRAPBOX_COOKIE", "").strip()
+    if cookie:
+        return {"Cookie": cookie}
+
+    connect_sid = os.getenv("SCRAPBOX_CONNECT_SID", "").strip()
+    if connect_sid:
+        return {"Cookie": f"connect.sid={connect_sid}"}
+
+    return {}
+
+
+def fetch_scrapbox_page_text(project, title):
+    page_name = (title or "").strip()
+    if not page_name:
+        return {"text": "", "error": "no_title"}
+
+    url = (
+        f"https://scrapbox.io/api/pages/"
+        f"{quote(project, safe='')}/{quote(page_name, safe='')}/text"
+    )
+
+    try:
+        res = requests.get(
+            url,
+            headers=scrapbox_request_headers(),
+            timeout=SCRAPBOX_SEARCH_TIMEOUT,
+        )
+        if res.status_code == 404:
+            return {"text": "", "error": "not_found"}
+        if res.status_code in (401, 403):
+            return {"text": "", "error": "access_denied"}
+        res.raise_for_status()
+    except requests.RequestException:
+        return {"text": "", "error": "unavailable"}
+
+    content_type = getattr(res, "headers", {}).get("Content-Type", "")
+    if content_type and "text/plain" not in content_type:
+        return {"text": "", "error": "unexpected_response"}
+
+    res.encoding = res.encoding or "utf-8"
+    return {"text": res.text.strip(), "error": ""}
+
+
+def student_log_url(student_id, name):
+    return url_for("student_log", student_id=student_id, name=name)
+
+
+def student_links(student_id, name, muselab_page_title):
+    links = {
+        "os": {
+            "label": "OSノート",
+            "url": student_log_url(student_id, name),
+            "external": False,
+        },
+        "musestudio": {
+            "label": "musestudio",
+            "url": scrapbox_project_page_url(MUSESTUDIO_PROJECT, name),
+            "external": True,
+        },
+    }
+
+    muselab_url = scrapbox_project_page_url(MUSELAB_PROJECT, muselab_page_title)
+    if muselab_url:
+        links["muselab"] = {
+            "label": "muselab",
+            "url": muselab_url,
+            "external": True,
+        }
+
+    return links
 
 
 def fetch_scrapbox_search_pages(project, query):
@@ -735,12 +808,7 @@ def students_index():
                 "grade": s.get("grade", ""),
                 "research_theme": research_theme,
                 "theme_source": theme_source,
-                "muselab_url": scrapbox_project_page_url(
-                    MUSELAB_PROJECT, muselab_page_title
-                ),
-                "musestudio_url": scrapbox_project_page_url(
-                    MUSESTUDIO_PROJECT, s["name"]
-                ),
+                "links": student_links(student_id, s["name"], muselab_page_title),
             }
         )
 
@@ -817,17 +885,29 @@ def student_log():
 
     conn = get_db()
     c = conn.cursor()
+    theme_overrides = fetch_student_research_theme_overrides(c)
     tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
     conn.close()
+
+    research_theme = (student.get("research_theme") or "").strip()
+    muselab_page_title = research_theme
+    theme_override = theme_overrides.get(student_id)
+    if theme_override:
+        research_theme = theme_override["research_theme"]
+        muselab_page_title = theme_override["muselab_page_title"] or research_theme
 
     tasks = format_history_rows(tasks)
     history = format_history_rows(history)
     notes = [dict(n) for n in notes]
+    links = student_links(student_id, student_name, muselab_page_title)
+    musestudio_text = fetch_scrapbox_page_text(MUSESTUDIO_PROJECT, student_name)
 
     return render_template(
         "student_log.html",
         student_name=student_name,
         student_id=student_id,
+        links=links,
+        musestudio_text=musestudio_text,
         tasks=tasks,
         notes=notes,
         history=history,
