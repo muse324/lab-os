@@ -580,6 +580,38 @@
     }
   };
 
+  SyncModule.syncGoogleCalendarMeetings = async function () {
+    const button = document.getElementById("syncGoogleCalendarMeetingsButton");
+    if (button) button.disabled = true;
+    setSyncResultText("Google Calendar個別M: 同期中...");
+
+    try {
+      const res = await ApiModule.postForm(
+        "/student_meetings/sync_google_calendar",
+        {},
+      );
+      const data = await res.json();
+      const warningText = data.warnings?.length
+        ? ` 警告${data.warnings.length}件。`
+        : "";
+
+      if (data.errors?.length) {
+        setSyncResultText(
+          `Google Calendar個別M: 同期できませんでした。${data.errors.join(" / ")}`,
+        );
+        return;
+      }
+
+      setSyncResultText(
+        `Google Calendar個別M: ${data.since_date}以降の予定${data.fetched}件を確認しました。追加${data.created}件、更新${data.updated}件、変更なし${data.unchanged}件、skipped ${data.skipped}件。${warningText}`,
+      );
+    } catch (e) {
+      setSyncResultText(`Google Calendar個別M: 同期に失敗しました: ${e}`);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+
   async function runDeploy(event) {
     event.preventDefault();
 
@@ -862,6 +894,7 @@
   window.importTasks = SyncModule.importTasks;
   window.markGptDeltaExported = SyncModule.markGptDeltaExported;
   window.rebuildStudentMeetings = SyncModule.rebuildStudentMeetings;
+  window.syncGoogleCalendarMeetings = SyncModule.syncGoogleCalendarMeetings;
   window.exportMemo = ExportModule.exportMemo;
   window.exportDelta = ExportModule.exportDelta;
   window.exportDeltaJson = ExportModule.exportDeltaJson;

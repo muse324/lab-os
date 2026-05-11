@@ -51,6 +51,7 @@ from sync import (
     update_snapshot,
     upsert_imported_task_note,
 )
+from services.google_calendar_sync import sync_student_meetings_from_gcal
 from task_parser import (
     build_quick_task_payload,
     guess_student_id,
@@ -462,6 +463,15 @@ def format_student_meeting_rows(rows):
     for row in rows:
         meeting = dict(row)
         meeting["meeting_date_display"] = format_date_jp(meeting.get("meeting_date"))
+        meeting["duration_minutes"] = meeting.get("duration_minutes")
+        meeting["source_display"] = (
+            meeting.get("calendar_source") or meeting.get("source") or "unknown"
+        )
+        if meeting.get("google_event_id") and not meeting.get("calendar_event_url"):
+            meeting["calendar_event_url"] = (
+                "https://calendar.google.com/calendar/event?eid="
+                + quote(str(meeting["google_event_id"]), safe="")
+            )
         topics = []
         raw_topics = meeting.get("topics")
 
@@ -916,6 +926,7 @@ def student_log():
     theme_overrides = fetch_student_research_theme_overrides(c)
     tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
     meetings = fetch_student_meetings(c, student_id)
+    conn.commit()
     conn.close()
 
     research_theme = (student.get("research_theme") or "").strip()
@@ -1462,6 +1473,27 @@ def rebuild_student_meetings():
         conn.close()
 
     return jsonify({"status": "ok", **stats})
+
+
+@app.route("/student_meetings/sync_google_calendar", methods=["POST"])
+def sync_google_calendar_student_meetings():
+    conn = get_db()
+    c = conn.cursor()
+    stats = {}
+
+    try:
+        stats = sync_student_meetings_from_gcal(c, STUDENTS_DATA)
+        conn.commit()
+        print("google calendar student_meetings sync:", stats)
+    except Exception as e:
+        conn.rollback()
+        stats = {"errors": [str(e)]}
+        print("google calendar student_meetings sync failed:", e)
+    finally:
+        conn.close()
+
+    status = "error" if stats.get("errors") else "ok"
+    return jsonify({"status": status, **stats})
 
 
 @app.route("/edit_task_title", methods=["POST"])

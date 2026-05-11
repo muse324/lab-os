@@ -87,8 +87,20 @@
           {{ m["start_time"] or "" }}{% if m["end_time"] %}-{{ m["end_time"] }}{% endif %}
         </span>
         {% endif %}
+        {% if m.get("duration_minutes") %}
+        <span class="meeting-meta">/ {{ m["duration_minutes"] }}分</span>
+        {% endif %}
       </div>
       <div>{{ m["title"] }}</div>
+      <div class="meeting-meta">
+        source: {{ m["source_display"] }}
+        {% if m.get("calendar_event_url") %}
+        /
+        <a href="{{ m['calendar_event_url'] }}" target="_blank" rel="noopener noreferrer">📅 Calendar</a>
+        {% elif m.get("google_event_id") %}
+        / 📅 Calendar
+        {% endif %}
+      </div>
       {% if m["summary"] %}
       <div class="meeting-summary">{{ m["summary"] }}</div>
       {% endif %}

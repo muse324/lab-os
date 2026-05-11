@@ -176,6 +176,15 @@ def init_db():
     c.execute("UPDATE tasks SET student_id=NULL WHERE student_id=''")
     c.execute("UPDATE notes SET student_id=NULL WHERE student_id=''")
     c.execute("UPDATE notes SET task_id=NULL WHERE task_id=''")
+    c.execute(
+        """
+        UPDATE student_meetings
+        SET calendar_source=source
+        WHERE (calendar_source IS NULL OR calendar_source='')
+          AND source IS NOT NULL
+          AND source != ''
+        """
+    )
 
     conn.commit()
     conn.close()
@@ -217,6 +226,10 @@ def ensure_student_meetings_table(cursor):
             topics TEXT,
             task_id INTEGER,
             source TEXT,
+            google_event_id TEXT,
+            duration_minutes INTEGER,
+            calendar_source TEXT,
+            calendar_event_url TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
@@ -235,6 +248,10 @@ def ensure_student_meetings_table(cursor):
             ("topics", "topics TEXT"),
             ("task_id", "task_id INTEGER"),
             ("source", "source TEXT"),
+            ("google_event_id", "google_event_id TEXT"),
+            ("duration_minutes", "duration_minutes INTEGER"),
+            ("calendar_source", "calendar_source TEXT"),
+            ("calendar_event_url", "calendar_event_url TEXT"),
             ("created_at", "created_at TEXT"),
             ("updated_at", "updated_at TEXT"),
         ],
@@ -249,6 +266,12 @@ def ensure_student_meetings_table(cursor):
         """
         CREATE INDEX IF NOT EXISTS idx_student_meetings_task_id
         ON student_meetings(task_id)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_student_meetings_google_event_id
+        ON student_meetings(google_event_id)
         """
     )
 
@@ -280,6 +303,23 @@ def extract_meeting_time_range(text):
         _normalize_meeting_time(match.group("start")),
         _normalize_meeting_time(match.group("end")),
     )
+
+
+def meeting_duration_minutes(start_time, end_time):
+    start_time = _normalize_meeting_time(start_time)
+    end_time = _normalize_meeting_time(end_time)
+    if not start_time or not end_time:
+        return None
+
+    start_hour, start_minute = [int(value) for value in start_time.split(":")]
+    end_hour, end_minute = [int(value) for value in end_time.split(":")]
+    start_total = start_hour * 60 + start_minute
+    end_total = end_hour * 60 + end_minute
+
+    if end_total < start_total:
+        return None
+
+    return end_total - start_total
 
 
 def _strip_meeting_time_range(text):
@@ -362,6 +402,8 @@ def _build_student_meeting_record(task, note_contents):
         "topics": json.dumps(topics, ensure_ascii=False),
         "task_id": task["task_id"],
         "source": "task_import",
+        "calendar_source": "task_import",
+        "duration_minutes": meeting_duration_minutes(start_time, end_time),
     }
 
 
@@ -426,8 +468,67 @@ def _row_value_for_compare(value):
     return str(value)
 
 
+def _find_existing_student_meeting(cursor, meeting):
+    google_event_id = meeting.get("google_event_id")
+    if google_event_id:
+        existing = cursor.execute(
+            """
+            SELECT *
+            FROM student_meetings
+            WHERE google_event_id=?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (google_event_id,),
+        ).fetchone()
+        if existing:
+            return existing
+
+    task_id = meeting.get("task_id")
+    if task_id:
+        existing = cursor.execute(
+            """
+            SELECT *
+            FROM student_meetings
+            WHERE task_id=?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (task_id,),
+        ).fetchone()
+        if existing:
+            return existing
+
+    student_id = meeting.get("student_id")
+    meeting_date = meeting.get("meeting_date")
+    start_time = meeting.get("start_time")
+    if student_id not in (None, "") and meeting_date and start_time:
+        existing = cursor.execute(
+            """
+            SELECT *
+            FROM student_meetings
+            WHERE student_id=?
+              AND meeting_date=?
+              AND start_time=?
+            ORDER BY google_event_id IS NULL, task_id IS NULL, id
+            LIMIT 1
+            """,
+            (student_id, meeting_date, start_time),
+        ).fetchone()
+        if existing:
+            return existing
+
+    return None
+
+
 def upsert_student_meeting(cursor, meeting):
     ensure_student_meetings_table(cursor)
+    meeting = dict(meeting)
+    if "calendar_source" not in meeting and meeting.get("source"):
+        meeting["calendar_source"] = meeting["source"]
+    if "source" not in meeting and meeting.get("calendar_source"):
+        meeting["source"] = meeting["calendar_source"]
+
     fields = [
         "student_id",
         "meeting_date",
@@ -438,35 +539,41 @@ def upsert_student_meeting(cursor, meeting):
         "topics",
         "task_id",
         "source",
+        "google_event_id",
+        "duration_minutes",
+        "calendar_source",
+        "calendar_event_url",
     ]
-    existing = cursor.execute(
-        """
-        SELECT *
-        FROM student_meetings
-        WHERE task_id=?
-        ORDER BY id
-        LIMIT 1
-        """,
-        (meeting["task_id"],),
-    ).fetchone()
+    existing = _find_existing_student_meeting(cursor, meeting)
 
     if existing:
+        if (
+            meeting.get("calendar_source") == "task_import"
+            and existing["google_event_id"]
+        ):
+            meeting.pop("source", None)
+            meeting.pop("calendar_source", None)
+
+        update_fields = [field for field in fields if field in meeting]
+        if not update_fields:
+            return "unchanged"
+
         changed = any(
             _row_value_for_compare(existing[field])
             != _row_value_for_compare(meeting.get(field))
-            for field in fields
+            for field in update_fields
         )
         if not changed:
             return "unchanged"
 
-        set_clause = ", ".join([f"{field}=?" for field in fields])
+        set_clause = ", ".join([f"{field}=?" for field in update_fields])
         cursor.execute(
             f"""
             UPDATE student_meetings
             SET {set_clause}, updated_at=datetime('now')
             WHERE id=?
             """,
-            tuple(meeting.get(field) for field in fields) + (existing["id"],),
+            tuple(meeting.get(field) for field in update_fields) + (existing["id"],),
         )
         return "updated"
 
