@@ -561,6 +561,25 @@
     );
   };
 
+  SyncModule.rebuildStudentMeetings = async function () {
+    const button = document.getElementById("rebuildStudentMeetingsButton");
+    if (button) button.disabled = true;
+    setSyncResultText("個別M履歴: 再構築中...");
+
+    try {
+      const res = await ApiModule.postForm("/student_meetings/rebuild", {});
+      const data = await res.json();
+
+      setSyncResultText(
+        `個別M履歴: ${data.since_date}以降の対象${data.scanned}件を確認しました。追加${data.created}件、更新${data.updated}件、変更なし${data.unchanged}件。`,
+      );
+    } catch (e) {
+      setSyncResultText(`個別M履歴: 再構築に失敗しました: ${e}`);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  };
+
   async function runDeploy(event) {
     event.preventDefault();
 
@@ -842,6 +861,7 @@
   window.applySelectedSync = SyncModule.applySelectedSync;
   window.importTasks = SyncModule.importTasks;
   window.markGptDeltaExported = SyncModule.markGptDeltaExported;
+  window.rebuildStudentMeetings = SyncModule.rebuildStudentMeetings;
   window.exportMemo = ExportModule.exportMemo;
   window.exportDelta = ExportModule.exportDelta;
   window.exportDeltaJson = ExportModule.exportDeltaJson;

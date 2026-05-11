@@ -1,5 +1,6 @@
 from io import StringIO
 from flask import Flask, render_template, request, redirect, jsonify, url_for
+import json
 import os
 import requests
 import csv
@@ -20,6 +21,7 @@ from db import (
     fetch_project_detail_rows,
     fetch_task_for_note,
     fetch_student_log_rows,
+    fetch_student_meetings,
     fetch_student_research_theme_overrides,
     fetch_student_summary_rows,
     get_db,
@@ -33,6 +35,7 @@ from db import (
     merge_project_tasks,
     move_task_to_project,
     move_tasks_to_project,
+    sync_student_meetings_from_tasks,
     update_task_deadline_and_priority,
     update_task_title as update_task_title_row,
     upsert_student_research_theme,
@@ -451,6 +454,31 @@ def format_history_rows(rows):
             d["new_deadline_display"] = None
 
         result.append(d)
+    return result
+
+
+def format_student_meeting_rows(rows):
+    result = []
+    for row in rows:
+        meeting = dict(row)
+        meeting["meeting_date_display"] = format_date_jp(meeting.get("meeting_date"))
+        topics = []
+        raw_topics = meeting.get("topics")
+
+        if raw_topics:
+            try:
+                parsed_topics = json.loads(raw_topics)
+                if isinstance(parsed_topics, list):
+                    topics = [str(topic) for topic in parsed_topics if topic]
+            except (TypeError, ValueError):
+                topics = [
+                    topic.strip()
+                    for topic in str(raw_topics).split("/")
+                    if topic.strip()
+                ]
+
+        meeting["topics_list"] = topics
+        result.append(meeting)
     return result
 
 
@@ -887,6 +915,7 @@ def student_log():
     c = conn.cursor()
     theme_overrides = fetch_student_research_theme_overrides(c)
     tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
+    meetings = fetch_student_meetings(c, student_id)
     conn.close()
 
     research_theme = (student.get("research_theme") or "").strip()
@@ -898,6 +927,7 @@ def student_log():
 
     tasks = format_history_rows(tasks)
     history = format_history_rows(history)
+    meetings = format_student_meeting_rows(meetings)
     notes = [dict(n) for n in notes]
     links = student_links(student_id, student_name, muselab_page_title)
     musestudio_text = fetch_scrapbox_page_text(MUSESTUDIO_PROJECT, student_name)
@@ -909,6 +939,7 @@ def student_log():
         links=links,
         musestudio_text=musestudio_text,
         tasks=tasks,
+        meetings=meetings,
         notes=notes,
         history=history,
     )
@@ -1416,6 +1447,21 @@ def mark_gpt_delta_exported():
         conn.close()
 
     return jsonify({"status": "ok", "snapshot_items": snapshot_items})
+
+
+@app.route("/student_meetings/rebuild", methods=["POST"])
+def rebuild_student_meetings():
+    conn = get_db()
+    c = conn.cursor()
+
+    try:
+        stats = sync_student_meetings_from_tasks(c)
+        conn.commit()
+        print("student_meetings rebuild:", stats)
+    finally:
+        conn.close()
+
+    return jsonify({"status": "ok", **stats})
 
 
 @app.route("/edit_task_title", methods=["POST"])

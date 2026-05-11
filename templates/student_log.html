@@ -21,6 +21,41 @@
     .notice {
       color: #777;
     }
+
+    .meeting-list {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .meeting-item {
+      border-left: 3px solid #ccd6dd;
+      margin: 10px 0;
+      padding: 6px 0 6px 10px;
+    }
+
+    .meeting-meta {
+      color: #666;
+      font-size: 0.9em;
+    }
+
+    .meeting-summary {
+      margin-top: 4px;
+      white-space: pre-wrap;
+    }
+
+    .topic-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .topic {
+      background: #eef2f4;
+      border-radius: 4px;
+      font-size: 0.85em;
+      padding: 2px 6px;
+    }
   </style>
 </head>
 
@@ -41,11 +76,52 @@
   </p>
 
 
+  <h2>個別M履歴</h2>
+  <ul class="meeting-list">
+    {% for m in meetings %}
+    <li class="meeting-item">
+      <div>
+        <b>{{ m["meeting_date_display"] or m["meeting_date"] }}</b>
+        {% if m["start_time"] or m["end_time"] %}
+        <span class="meeting-meta">
+          {{ m["start_time"] or "" }}{% if m["end_time"] %}-{{ m["end_time"] }}{% endif %}
+        </span>
+        {% endif %}
+      </div>
+      <div>{{ m["title"] }}</div>
+      {% if m["summary"] %}
+      <div class="meeting-summary">{{ m["summary"] }}</div>
+      {% endif %}
+      {% if m["topics_list"] %}
+      <div class="topic-list">
+        {% for topic in m["topics_list"] %}
+        <span class="topic">{{ topic }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if m["task_id"] %}
+      <div class="meeting-meta">
+        関連 task:
+        <a href="#task-{{ m['task_id'] }}">#{{ m["task_id"] }}</a>
+        {% if m["project_id"] %}
+        /
+        <a href="/project/{{ m['project_id'] }}?task_id={{ m['task_id'] }}">
+          {{ m["project_name"] or "project" }}
+        </a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </li>
+    {% else %}
+    <li>個別M履歴はありません。</li>
+    {% endfor %}
+  </ul>
+
 
   <h2>関連タスク</h2>
   <ul>
     {% for t in tasks %}
-    <li>
+    <li id="task-{{ t['task_id'] }}">
       {% if t["deadline_soon"] is defined and t["deadline_soon"] %}🔥{% endif %}
       {% if t["priority"] == "high" %}❣️{% endif %}
       {{

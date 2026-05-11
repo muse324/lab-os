@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sqlite3
@@ -11,6 +12,11 @@ RESEARCH_NOTE_TITLE_RE = re.compile(
     r"^第(?P<index>\d+)回(?P<space>\s*)研究のおと（note\.com）を執筆する$"
 )
 PRACTICE_TITLE_RE = re.compile(r"^.+を練習する$")
+INDIVIDUAL_MEETING_TITLE_PREFIX = "個別M:"
+INDIVIDUAL_MEETING_SINCE_DATE = "2026-04-01"
+MEETING_TIME_RE = re.compile(
+    r"(?P<start>[0-2]?\d[:：][0-5]\d)\s*[-ー〜~–－−—]\s*(?P<end>[0-2]?\d[:：][0-5]\d)"
+)
 
 
 def get_db():
@@ -107,6 +113,8 @@ def init_db():
     if "task_id" not in note_columns:
         c.execute("ALTER TABLE notes ADD COLUMN task_id INTEGER")
 
+    ensure_student_meetings_table(c)
+
     c.execute(
         """
     CREATE TABLE IF NOT EXISTS task_history (
@@ -167,6 +175,7 @@ def init_db():
     c.execute("UPDATE tasks SET original_deadline=NULL WHERE original_deadline=''")
     c.execute("UPDATE tasks SET student_id=NULL WHERE student_id=''")
     c.execute("UPDATE notes SET student_id=NULL WHERE student_id=''")
+    c.execute("UPDATE notes SET task_id=NULL WHERE task_id=''")
 
     conn.commit()
     conn.close()
@@ -183,6 +192,339 @@ def ensure_student_research_themes_table(cursor):
         )
         """
     )
+
+
+def _ensure_columns(cursor, table_name, column_definitions):
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    existing_columns = {col[1] for col in cursor.fetchall()}
+
+    for column_name, column_definition in column_definitions:
+        if column_name not in existing_columns:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+
+def ensure_student_meetings_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS student_meetings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            meeting_date TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            title TEXT,
+            summary TEXT,
+            topics TEXT,
+            task_id INTEGER,
+            source TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    _ensure_columns(
+        cursor,
+        "student_meetings",
+        [
+            ("student_id", "student_id INTEGER"),
+            ("meeting_date", "meeting_date TEXT"),
+            ("start_time", "start_time TEXT"),
+            ("end_time", "end_time TEXT"),
+            ("title", "title TEXT"),
+            ("summary", "summary TEXT"),
+            ("topics", "topics TEXT"),
+            ("task_id", "task_id INTEGER"),
+            ("source", "source TEXT"),
+            ("created_at", "created_at TEXT"),
+            ("updated_at", "updated_at TEXT"),
+        ],
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_student_meetings_student_date
+        ON student_meetings(student_id, meeting_date)
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_student_meetings_task_id
+        ON student_meetings(task_id)
+        """
+    )
+
+
+def _normalize_meeting_time(value):
+    value = (value or "").strip().replace("：", ":")
+    if not value:
+        return None
+
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def extract_meeting_time_range(text):
+    match = MEETING_TIME_RE.search(text or "")
+    if not match:
+        return None, None
+
+    return (
+        _normalize_meeting_time(match.group("start")),
+        _normalize_meeting_time(match.group("end")),
+    )
+
+
+def _strip_meeting_time_range(text):
+    text = MEETING_TIME_RE.sub("", text or "", count=1)
+    return text.strip(" \t\n/-ー〜~|｜／")
+
+
+def _compact_meeting_text(text):
+    lines = [
+        line.strip(" \t/-ー〜~|｜／")
+        for line in (text or "").splitlines()
+        if line.strip()
+    ]
+    return "\n".join(lines).strip()
+
+
+def _meeting_title_summary(title):
+    title = (title or "").strip()
+    if title.startswith(INDIVIDUAL_MEETING_TITLE_PREFIX):
+        title = title[len(INDIVIDUAL_MEETING_TITLE_PREFIX) :].strip()
+    return title
+
+
+def _meeting_topic_candidates(summary, title):
+    summary = _strip_meeting_time_range(summary or "")
+    first_summary_line = ""
+    for line in summary.splitlines():
+        if line.strip():
+            first_summary_line = line.strip()
+            break
+
+    if first_summary_line:
+        yield first_summary_line
+
+    for match in re.findall(r"[（(]([^）)]+)[）)]", title or ""):
+        if match.strip():
+            yield match.strip()
+
+    fallback = _meeting_title_summary(title)
+    if fallback:
+        yield fallback
+
+
+def extract_meeting_topics(summary, title):
+    for candidate in _meeting_topic_candidates(summary, title):
+        candidate = _strip_meeting_time_range(candidate)
+        chunks = re.split(r"\s*(?:/|／|、|,|;|；|\||｜|・)\s*", candidate)
+        topics = []
+
+        for chunk in chunks:
+            topic = chunk.strip(" \t\n-ー〜~")
+            if not topic:
+                continue
+            if MEETING_TIME_RE.fullmatch(topic):
+                continue
+            if topic not in topics:
+                topics.append(topic)
+
+        if topics:
+            return topics
+
+    return []
+
+
+def _build_student_meeting_record(task, note_contents):
+    note_body = _compact_meeting_text("\n".join(note_contents))
+    source_text = note_body or task["title"]
+    start_time, end_time = extract_meeting_time_range(source_text)
+    summary = _strip_meeting_time_range(note_body) if note_body else ""
+    summary = _compact_meeting_text(summary) or _meeting_title_summary(task["title"])
+    topics = extract_meeting_topics(summary, task["title"])
+
+    return {
+        "student_id": task["student_id"],
+        "meeting_date": (task["deadline"] or "")[:10],
+        "start_time": start_time,
+        "end_time": end_time,
+        "title": task["title"],
+        "summary": summary,
+        "topics": json.dumps(topics, ensure_ascii=False),
+        "task_id": task["task_id"],
+        "source": "task_import",
+    }
+
+
+def _fetch_individual_meeting_sources(cursor, since_date):
+    rows = cursor.execute(
+        """
+        SELECT
+            tasks.id AS task_id,
+            tasks.student_id AS student_id,
+            tasks.deadline AS deadline,
+            tasks.title AS title,
+            notes.id AS note_id,
+            notes.content AS note_content
+        FROM tasks
+        LEFT JOIN notes
+          ON notes.task_id = tasks.id
+          OR (
+            COALESCE(CAST(notes.task_id AS TEXT), '') = ''
+            AND notes.student_id = tasks.student_id
+            AND notes.title = tasks.title
+          )
+        WHERE tasks.title LIKE ?
+          AND tasks.student_id IS NOT NULL
+          AND CAST(tasks.student_id AS TEXT) != ''
+          AND tasks.deadline IS NOT NULL
+          AND tasks.deadline != ''
+          AND substr(tasks.deadline, 1, 10) >= ?
+        ORDER BY substr(tasks.deadline, 1, 10), tasks.id, notes.created_at, notes.id
+        """,
+        (f"{INDIVIDUAL_MEETING_TITLE_PREFIX}%", since_date),
+    ).fetchall()
+
+    sources = {}
+    note_ids_by_task = {}
+
+    for row in rows:
+        task_id = row["task_id"]
+        if task_id not in sources:
+            sources[task_id] = {
+                "task": {
+                    "task_id": row["task_id"],
+                    "student_id": row["student_id"],
+                    "deadline": row["deadline"],
+                    "title": row["title"],
+                },
+                "note_contents": [],
+            }
+            note_ids_by_task[task_id] = set()
+
+        note_id = row["note_id"]
+        note_content = row["note_content"]
+        if note_id and note_id not in note_ids_by_task[task_id] and note_content:
+            sources[task_id]["note_contents"].append(note_content)
+            note_ids_by_task[task_id].add(note_id)
+
+    return list(sources.values())
+
+
+def _row_value_for_compare(value):
+    if value is None:
+        return ""
+    return str(value)
+
+
+def upsert_student_meeting(cursor, meeting):
+    ensure_student_meetings_table(cursor)
+    fields = [
+        "student_id",
+        "meeting_date",
+        "start_time",
+        "end_time",
+        "title",
+        "summary",
+        "topics",
+        "task_id",
+        "source",
+    ]
+    existing = cursor.execute(
+        """
+        SELECT *
+        FROM student_meetings
+        WHERE task_id=?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (meeting["task_id"],),
+    ).fetchone()
+
+    if existing:
+        changed = any(
+            _row_value_for_compare(existing[field])
+            != _row_value_for_compare(meeting.get(field))
+            for field in fields
+        )
+        if not changed:
+            return "unchanged"
+
+        set_clause = ", ".join([f"{field}=?" for field in fields])
+        cursor.execute(
+            f"""
+            UPDATE student_meetings
+            SET {set_clause}, updated_at=datetime('now')
+            WHERE id=?
+            """,
+            tuple(meeting.get(field) for field in fields) + (existing["id"],),
+        )
+        return "updated"
+
+    cursor.execute(
+        f"""
+        INSERT INTO student_meetings (
+            {", ".join(fields)}, created_at, updated_at
+        )
+        VALUES ({", ".join(["?"] * len(fields))}, datetime('now'), datetime('now'))
+        """,
+        tuple(meeting.get(field) for field in fields),
+    )
+    return "created"
+
+
+def sync_student_meetings_from_tasks(
+    cursor, since_date=INDIVIDUAL_MEETING_SINCE_DATE
+):
+    ensure_student_meetings_table(cursor)
+    sources = _fetch_individual_meeting_sources(cursor, since_date)
+    stats = {
+        "since_date": since_date,
+        "scanned": len(sources),
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+    }
+
+    for source in sources:
+        meeting = _build_student_meeting_record(
+            source["task"], source["note_contents"]
+        )
+        result = upsert_student_meeting(cursor, meeting)
+        stats[result] += 1
+
+    return stats
+
+
+def fetch_student_meetings(cursor, student_id, descending=True):
+    ensure_student_meetings_table(cursor)
+    order = "DESC" if descending else "ASC"
+    return cursor.execute(
+        f"""
+        SELECT
+            student_meetings.*,
+            tasks.project_id AS project_id,
+            projects.name AS project_name
+        FROM student_meetings
+        LEFT JOIN tasks ON student_meetings.task_id = tasks.id
+        LEFT JOIN projects ON tasks.project_id = projects.id
+        WHERE student_meetings.student_id=?
+        ORDER BY
+            student_meetings.meeting_date {order},
+            student_meetings.start_time {order},
+            student_meetings.id {order}
+        """,
+        (student_id,),
+    ).fetchall()
 
 
 def fetch_student_research_theme_overrides(cursor):
