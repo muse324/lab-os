@@ -1,4 +1,5 @@
 from io import StringIO
+from contextlib import contextmanager
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 import json
 import os
@@ -128,6 +129,52 @@ def inject_task_stage_helpers():
     return {
         "task_stages": TASK_STAGE_DEFINITIONS,
         "task_stage_labels": TASK_STAGE_LABELS,
+    }
+
+
+@contextmanager
+def db_cursor(commit=False):
+    conn = get_db()
+    try:
+        yield conn.cursor()
+        if commit:
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def next_url(default="/"):
+    return request.form.get("next") or default
+
+
+def resolve_student_request(student_id_arg, requested_student_name=""):
+    student_name = requested_student_name
+    student_id = normalize_student_id_value(student_id_arg)
+    if student_id is None and not student_name:
+        return None
+
+    student = find_student(student_id, student_name)
+    if not student and student_id is not None:
+        student = {
+            "name": student_name or f"student_id:{student_id}",
+            "student_id": student_id,
+        }
+    if not student and student_name:
+        student = {"name": student_name, "student_id": student_id}
+    if not student:
+        return None
+
+    student_id = normalize_student_id_value(student["student_id"])
+    student_name = student.get("name") or student_name or f"student_id:{student_id}"
+    student_aliases = student_aliases_for_id(student_id, student_name)
+    if requested_student_name and requested_student_name not in student_aliases:
+        student_aliases.append(requested_student_name)
+
+    return {
+        "student": student,
+        "student_id": student_id,
+        "student_name": student_name,
+        "student_aliases": student_aliases,
     }
 
 
@@ -304,13 +351,9 @@ def format_all_snapshots_as_scrapbox(snapshots):
 
 @app.route("/export_snapshot_scrapbox_all")
 def export_snapshot_scrapbox_all():
-    conn = get_db()
-    c = conn.cursor()
-
-    snapshots = build_all_snapshots(c)
+    with db_cursor() as c:
+        snapshots = build_all_snapshots(c)
     text = format_all_snapshots_as_scrapbox(snapshots)
-
-    conn.close()
 
     return text, 200, {"Content-Type": "text/plain; charset=utf-8"}
 
@@ -527,10 +570,7 @@ def filter_future_tasks_by_months(tasks_todo, today_str, months):
 
 
 def build_home_context(months):
-    conn = get_db()
-    c = conn.cursor()
-
-    try:
+    with db_cursor() as c:
         today_str = get_today_str(c)
         all_tasks = apply_format(fetch_home_tasks(c))
         classified = classify_tasks(all_tasks, today_str)
@@ -545,8 +585,6 @@ def build_home_context(months):
             "tasks_done": classified["done_tasks"],
             "tasks_todo_anytime": classified["anytime_tasks"],
         }
-    finally:
-        conn.close()
 
 
 def attach_related_notes(tasks, notes_by_task_id):
@@ -575,10 +613,7 @@ def build_archived_tasks_with_reason(archived_rows):
 
 
 def build_project_detail_context(project_id, task_id_filter):
-    conn = get_db()
-    c = conn.cursor()
-
-    try:
+    with db_cursor() as c:
         today_str = get_today_str(c)
         project, all_tasks, history, notes = fetch_project_detail_rows(
             c, project_id, task_id_filter
@@ -622,8 +657,6 @@ def build_project_detail_context(project_id, task_id_filter):
             "unlinked_notes": unlinked_notes,
             "history": history,
         }
-    finally:
-        conn.close()
 
 
 # =========================================================
@@ -664,38 +697,28 @@ def inbox_view():
 def move_task():
     task_id = request.form["task_id"]
     new_project_id = request.form["project_id"]
-    next_url = request.form.get("next")
 
-    conn = get_db()
-    c = conn.cursor()
+    with db_cursor(commit=True) as c:
+        move_task_to_project(c, task_id, new_project_id)
 
-    move_task_to_project(c, task_id, new_project_id)
-    conn.commit()
-    conn.close()
-
-    return redirect(next_url or "/inbox")
+    return redirect(next_url("/inbox"))
 
 
 @app.route("/move_tasks", methods=["POST"])
 def move_tasks():
     task_ids = request.form.getlist("task_ids")
     new_project_id = request.form.get("project_id")
-    next_url = request.form.get("next")
 
     if not new_project_id:
         return "project_id is required", 400
 
     if not task_ids:
-        return redirect(next_url or "/")
+        return redirect(next_url())
 
-    conn = get_db()
-    c = conn.cursor()
+    with db_cursor(commit=True) as c:
+        move_tasks_to_project(c, task_ids, new_project_id)
 
-    move_tasks_to_project(c, task_ids, new_project_id)
-    conn.commit()
-    conn.close()
-
-    return redirect(next_url or "/")
+    return redirect(next_url())
 
 
 @app.route("/update_task", methods=["POST"])
@@ -706,24 +729,19 @@ def update_task():
     priority_submitted = request.form.get("priority_present") == "1"
     task_stage = request.form.get("task_stage")
     task_stage_submitted = request.form.get("task_stage_present") == "1"
-    next_url = request.form.get("next")
 
-    conn = get_db()
-    c = conn.cursor()
+    with db_cursor(commit=True) as c:
+        update_task_deadline_and_priority(
+            c,
+            task_id,
+            new_deadline,
+            make_high,
+            priority_submitted,
+            task_stage,
+            task_stage_submitted,
+        )
 
-    update_task_deadline_and_priority(
-        c,
-        task_id,
-        new_deadline,
-        make_high,
-        priority_submitted,
-        task_stage,
-        task_stage_submitted,
-    )
-    conn.commit()
-    conn.close()
-
-    return redirect(next_url or "/")
+    return redirect(next_url())
 
 
 # =========================================================
@@ -736,11 +754,8 @@ def students_index():
     # 学籍番号昇順（上級生→下級生）
     students.sort(key=lambda x: x["student_id"])
 
-    conn = get_db()
-    c = conn.cursor()
-    theme_overrides = fetch_student_research_theme_overrides(c)
-    conn.commit()
-    conn.close()
+    with db_cursor() as c:
+        theme_overrides = fetch_student_research_theme_overrides(c)
 
     student_rows = []
     seen_student_ids = set()
@@ -800,16 +815,13 @@ def update_student_research_theme():
 
     muselab_page_title = research_theme
 
-    conn = get_db()
-    c = conn.cursor()
-    upsert_student_research_theme(
-        c,
-        student_id,
-        research_theme,
-        muselab_page_title,
-    )
-    conn.commit()
-    conn.close()
+    with db_cursor(commit=True) as c:
+        upsert_student_research_theme(
+            c,
+            student_id,
+            research_theme,
+            muselab_page_title,
+        )
 
     return redirect(f"/students?theme=ok#student-{student_id}")
 
@@ -818,34 +830,19 @@ def update_student_research_theme():
 def student_log():
     student_id_arg = request.args.get("student_id")
     requested_student_name = request.args.get("name", "")
-    student_name = requested_student_name
-    student_id = normalize_student_id_value(student_id_arg)
-    if student_id is None and not student_name:
+    resolved = resolve_student_request(student_id_arg, requested_student_name)
+    if not resolved:
         return redirect("/students")
 
-    student = find_student(student_id, student_name)
-    if not student and student_id is not None:
-        student = {
-            "name": student_name or f"student_id:{student_id}",
-            "student_id": student_id,
-        }
+    student = resolved["student"]
+    student_id = resolved["student_id"]
+    student_name = resolved["student_name"]
+    student_aliases = resolved["student_aliases"]
 
-    if not student:
-        return redirect("/students")
-
-    student_id = normalize_student_id_value(student["student_id"])
-    student_name = student.get("name") or student_name or f"student_id:{student_id}"
-    student_aliases = student_aliases_for_id(student_id, student_name)
-    if requested_student_name and requested_student_name not in student_aliases:
-        student_aliases.append(requested_student_name)
-
-    conn = get_db()
-    c = conn.cursor()
-    theme_overrides = fetch_student_research_theme_overrides(c)
-    tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
-    meetings = fetch_student_meetings(c, student_id)
-    conn.commit()
-    conn.close()
+    with db_cursor() as c:
+        theme_overrides = fetch_student_research_theme_overrides(c)
+        tasks, notes, history = fetch_student_log_rows(c, student_id, student_aliases)
+        meetings = fetch_student_meetings(c, student_id)
 
     research_theme = (student.get("research_theme") or "").strip()
     muselab_page_title = research_theme
@@ -881,37 +878,22 @@ def student_log():
 def student_summary():
     student_id_arg = request.args.get("student_id")
     requested_student_name = request.args.get("name", "")
-    student_name = requested_student_name
-    student_id = normalize_student_id_value(student_id_arg)
-    if student_id is None and not student_name:
+    if student_id_arg is None and not requested_student_name:
         return jsonify({"error": "name or student_id is required"}), 400
 
-    student = find_student(student_id, student_name)
-    if not student and student_id is not None:
-        student = {
-            "name": student_name or f"student_id:{student_id}",
-            "student_id": student_id,
-        }
-
-    if not student and student_name:
-        student = {"name": student_name, "student_id": student_id}
-
-    if not student:
+    resolved = resolve_student_request(student_id_arg, requested_student_name)
+    if not resolved:
         return jsonify({"error": "student not found"}), 404
 
-    student_id = normalize_student_id_value(student["student_id"])
-    student_name = student.get("name") or student_name or f"student_id:{student_id}"
+    student_id = resolved["student_id"]
+    student_name = resolved["student_name"]
     display_student_name = requested_student_name or student_name
-    student_aliases = student_aliases_for_id(student_id, student_name)
-    if requested_student_name and requested_student_name not in student_aliases:
-        student_aliases.append(requested_student_name)
+    student_aliases = resolved["student_aliases"]
 
-    conn = get_db()
-    c = conn.cursor()
-    todo_count, done_count, overdue_count, next_tasks = fetch_student_summary_rows(
-        c, student_id, student_aliases
-    )
-    conn.close()
+    with db_cursor() as c:
+        todo_count, done_count, overdue_count, next_tasks = fetch_student_summary_rows(
+            c, student_id, student_aliases
+        )
 
     return jsonify(
         {
@@ -933,10 +915,8 @@ def student_summary():
 # =========================================================
 @app.route("/projects")
 def projects():
-    conn = get_db()
-    c = conn.cursor()
-    projects = fetch_all_projects(c)
-    conn.close()
+    with db_cursor() as c:
+        projects = fetch_all_projects(c)
 
     return render_template("projects.html", projects=projects)
 
@@ -946,11 +926,8 @@ def add_project():
     name = request.form["name"]
     type_ = request.form["type"]
 
-    conn = get_db()
-    c = conn.cursor()
-    insert_project(c, name, type_)
-    conn.commit()
-    conn.close()
+    with db_cursor(commit=True) as c:
+        insert_project(c, name, type_)
 
     return redirect("/projects")
 
@@ -968,33 +945,17 @@ def add_task():
     if student_id is None:
         student_id = guess_student_id(title, STUDENTS_DATA)
 
-    # ★追加
-    next_page = request.form.get("next")
+    with db_cursor(commit=True) as c:
+        insert_task(c, title, project_id, deadline, priority, student_id)
 
-    conn = get_db()
-    c = conn.cursor()
-    insert_task(c, title, project_id, deadline, priority, student_id)
-    conn.commit()
-    conn.close()
-
-    # ★ここが分岐
-    if next_page:
-        return redirect(next_page)
-    else:
-        return redirect("/")
+    return redirect(next_url())
 
 
 @app.route("/done/<int:task_id>", methods=["POST"])
 def done_task(task_id):
-    conn = get_db()
-    c = conn.cursor()
-    try:
+    with db_cursor(commit=True) as c:
         mark_task_done(c, task_id)
-        conn.commit()
-    finally:
-        conn.close()
-    next_url = request.form.get("next")
-    return redirect(next_url or "/")
+    return redirect(next_url())
 
 
 @app.route("/project/<int:project_id>")
@@ -1024,9 +985,7 @@ def merge_tasks():
     if not project_id or not keep_task_id:
         return "project_id and keep_task_id are required", 400
 
-    conn = get_db()
-    c = conn.cursor()
-    try:
+    with db_cursor(commit=True) as c:
         merge_project_tasks(
             c,
             project_id,
@@ -1036,12 +995,6 @@ def merge_tasks():
             merged_deadline,
             merged_priority,
         )
-        conn.commit()
-    except ValueError as e:
-        conn.rollback()
-        return str(e), 400
-    finally:
-        conn.close()
 
     return redirect(next_url)
 
@@ -1054,49 +1007,40 @@ def add_note():
     student_id = normalize_student_id_value(request.form.get("student_id"))
     task_id = request.form.get("task_id") or None
     scrapbox_url = request.form.get("scrapbox_url", "").strip()
-    next_url = request.form.get("next")
 
-    conn = get_db()
-    c = conn.cursor()
+    with db_cursor(commit=True) as c:
+        task = fetch_task_for_note(c, task_id) if task_id else None
+        if task:
+            title = title or task["title"]
+            project_id = task["project_id"] or project_id
+            student_id = student_id if student_id is not None else task["student_id"]
+            scrapbox_url = scrapbox_url or scrapbox_page_url(task["title"])
+        else:
+            task_id = None
+            scrapbox_url = scrapbox_url or scrapbox_page_url(title)
 
-    task = fetch_task_for_note(c, task_id) if task_id else None
-    if task:
-        title = title or task["title"]
-        project_id = task["project_id"] or project_id
-        student_id = student_id if student_id is not None else task["student_id"]
-        scrapbox_url = scrapbox_url or scrapbox_page_url(task["title"])
-    else:
-        task_id = None
-        scrapbox_url = scrapbox_url or scrapbox_page_url(title)
+        if not title:
+            return "title is required", 400
 
-    if not title:
-        conn.close()
-        return "title is required", 400
+        insert_note(c, title, content, project_id, student_id, task_id, scrapbox_url)
 
-    insert_note(c, title, content, project_id, student_id, task_id, scrapbox_url)
-    conn.commit()
-    conn.close()
-
-    return redirect(next_url or "/project/" + str(project_id))
+    return redirect(next_url(f"/project/{project_id}"))
 
 
 @app.route("/quick_add", methods=["POST"])
 def quick_add():
     text = request.form["text"]
 
-    conn = get_db()
-    c = conn.cursor()
-    payload = build_quick_task_payload(text, c, STUDENTS_DATA)
-    insert_task(
-        c,
-        payload["title"],
-        payload["project_id"],
-        payload["deadline"] or None,
-        payload["priority"],
-        payload["student_id"],
-    )
-    conn.commit()
-    conn.close()
+    with db_cursor(commit=True) as c:
+        payload = build_quick_task_payload(text, c, STUDENTS_DATA)
+        insert_task(
+            c,
+            payload["title"],
+            payload["project_id"],
+            payload["deadline"] or None,
+            payload["priority"],
+            payload["student_id"],
+        )
 
     return redirect("/")
 
@@ -1110,17 +1054,12 @@ def import_tasks():
     raw = normalize_quotes(raw)
     data = json.loads(raw)
 
-    conn = get_db()
-    c = conn.cursor()
+    with db_cursor(commit=True) as c:
+        normalized_items, _ = normalize_imported_tasks(data, c, STUDENTS_DATA)
 
-    normalized_items, _ = normalize_imported_tasks(data, c, STUDENTS_DATA)
-
-    for t in normalized_items:
-        task_id = insert_imported_task(c, t)
-        upsert_imported_task_note(c, task_id, t)
-
-    conn.commit()
-    conn.close()
+        for t in normalized_items:
+            task_id = insert_imported_task(c, t)
+            upsert_imported_task_note(c, task_id, t)
 
     return redirect("/")
 
@@ -1147,10 +1086,8 @@ def sync_preview():
     if error:
         return jsonify(error), 400
 
-    conn = get_db()
-    c = conn.cursor()
-    response = build_sync_preview_response(data, c, STUDENTS_DATA)
-    conn.close()
+    with db_cursor() as c:
+        response = build_sync_preview_response(data, c, STUDENTS_DATA)
 
     return jsonify(response)
 
@@ -1162,19 +1099,12 @@ def sync_apply():
     if error:
         return jsonify(error), 400
 
-    conn = get_db()
-    c = conn.cursor()
-    diff = build_sync_diff(data, c, STUDENTS_DATA)
-    created, updated, archived, updated_task_ids = apply_sync_diff(c, diff)
-
-    try:
-        conn.commit()
+    with db_cursor(commit=True) as c:
+        diff = build_sync_diff(data, c, STUDENTS_DATA)
+        created, updated, archived, updated_task_ids = apply_sync_diff(c, diff)
         if created or updated or archived:
             update_snapshot(c)
-            conn.commit()
         sync_history = fetch_recent_sync_history(c)
-    finally:
-        conn.close()
 
     return jsonify(
         {
@@ -1215,10 +1145,7 @@ def sync_apply_selected():
             return item.get("sync_key")
         return item
 
-    conn = get_db()
-    c = conn.cursor()
-
-    try:
+    with db_cursor(commit=True) as c:
         diff = build_sync_diff(data, c, STUDENTS_DATA)
 
         filtered_diff = dict(diff)
@@ -1236,14 +1163,9 @@ def sync_apply_selected():
         filtered_diff["unchanged"] = []
 
         created, updated, archived, updated_task_ids = apply_sync_diff(c, filtered_diff)
-
-        conn.commit()
         if created or updated or archived:
             update_snapshot(c)
-            conn.commit()
         sync_history = fetch_recent_sync_history(c)
-    finally:
-        conn.close()
 
     return jsonify(
         {
@@ -1303,11 +1225,8 @@ def deploy():
 # ChatGPT向けタスクエクスポート
 @app.route("/export_tasks_for_chatgpt")
 def export_tasks_for_chatgpt():
-    conn = get_db()
-    c = conn.cursor()
-
-    rows = fetch_export_tasks_for_chatgpt(c)
-    conn.close()
+    with db_cursor() as c:
+        rows = fetch_export_tasks_for_chatgpt(c)
 
     tasks = []
     for r in rows:
@@ -1424,17 +1343,10 @@ def edit_task_title():
     if not new_title:
         return redirect("/")
 
-    conn = get_db()
-    c = conn.cursor()
-
-    try:
+    with db_cursor(commit=True) as c:
         update_task_title_row(c, task_id, new_title)
-        conn.commit()
-    finally:
-        conn.close()
 
-    next_url = request.form.get("next")
-    return redirect(next_url or "/")
+    return redirect(next_url())
 
 
 @app.route("/gpt_memory_sync", methods=["POST"])
@@ -1466,21 +1378,11 @@ def gpt_memory_sync():
         except Exception as e:
             print("normalize error:", t, e)
 
-    conn = get_db()
-    c = conn.cursor()
-
-    try:
+    with db_cursor(commit=True) as c:
         diff = build_sync_diff(normalized_tasks, c, STUDENTS_DATA)
         created, updated, archived, updated_task_ids = apply_sync_diff(c, diff)
-
-        conn.commit()
-
         if created or updated or archived:
             update_snapshot(c)
-            conn.commit()
-
-    finally:
-        conn.close()
 
     # --- ログ出力 ---
     print("=== GPT MEMORY SYNC RESULT ===")
