@@ -18,6 +18,59 @@ MEETING_TIME_RE = re.compile(
     r"(?P<start>[0-2]?\d[:：][0-5]\d)\s*[-ー〜~–－−—]\s*(?P<end>[0-2]?\d[:：][0-5]\d)"
 )
 
+TASK_STAGE_DEFINITIONS = [
+    {"value": "idea", "label": "構想"},
+    {"value": "planned", "label": "予定"},
+    {"value": "doing", "label": "作業中"},
+    {"value": "operational", "label": "運用中"},
+    {"value": "blocked", "label": "保留"},
+    {"value": "done", "label": "完了"},
+]
+TASK_STAGE_VALUES = {stage["value"] for stage in TASK_STAGE_DEFINITIONS}
+TASK_STAGE_LABELS = {
+    stage["value"]: stage["label"] for stage in TASK_STAGE_DEFINITIONS
+}
+
+LAB_OS_PROJECT_NAME = "研究室運営OS"
+LAB_OS_OPERATIONAL_STAGE_KEYWORDS = [
+    "Inbox一括振り分け",
+    "Todayダッシュボード",
+    "学生ログ",
+    "差分UI",
+    "sync_preview",
+    "JSON生成",
+    "ローカル抽出器",
+]
+LAB_OS_PLANNED_STAGE_KEYWORDS = [
+    "JSONバリデーション",
+    "ロールバック",
+    "締切リマインド",
+    "年間業務ピークログ",
+    "スケジュール表Webアプリ",
+]
+LAB_OS_IDEA_STAGE_KEYWORDS = [
+    "履歴ベース学習型",
+    "類似度ベース",
+    "自動提案",
+    "双方向リンク連携",
+]
+
+
+def infer_task_stage(status=None, archived=0, deadline=None, completed=0):
+    if str(status or "").lower() == "done" or int(archived or 0) == 1:
+        return "done"
+    if int(completed or 0) == 1:
+        return "done"
+    if deadline:
+        return "planned"
+    return "idea"
+
+
+def normalize_task_stage(value, status=None, archived=0, deadline=None, completed=0):
+    if value in TASK_STAGE_VALUES:
+        return value
+    return infer_task_stage(status, archived, deadline, completed)
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
@@ -66,6 +119,7 @@ def init_db():
             source_updated_at TEXT,
             source_url TEXT,
             scrapbox_url TEXT,
+            task_stage TEXT,
             archived INTEGER DEFAULT 0
         )
         """
@@ -73,6 +127,7 @@ def init_db():
 
     c.execute("PRAGMA table_info(tasks)")
     columns = [col[1] for col in c.fetchall()]
+    task_stage_added = "task_stage" not in columns
     if "original_deadline" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN original_deadline TEXT")
     if "student_id" not in columns:
@@ -89,6 +144,10 @@ def init_db():
         c.execute("ALTER TABLE tasks ADD COLUMN scrapbox_url TEXT")
     if "archived" not in columns:
         c.execute("ALTER TABLE tasks ADD COLUMN archived INTEGER DEFAULT 0")
+    if task_stage_added:
+        c.execute("ALTER TABLE tasks ADD COLUMN task_stage TEXT")
+
+    ensure_task_stage_values(c, columns, apply_lab_os_seed=task_stage_added)
 
     c.execute(
         """
@@ -210,6 +269,138 @@ def _ensure_columns(cursor, table_name, column_definitions):
     for column_name, column_definition in column_definitions:
         if column_name not in existing_columns:
             cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+
+
+def _active_task_condition(columns):
+    condition = "COALESCE(status, '') != 'done' AND COALESCE(archived, 0) = 0"
+    if "completed" in columns:
+        condition += " AND COALESCE(completed, 0) = 0"
+    return condition
+
+
+def ensure_task_stage_values(cursor, columns, apply_lab_os_seed=False):
+    valid_stages = sorted(TASK_STAGE_VALUES)
+    placeholders = ",".join(["?"] * len(valid_stages))
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage=NULL
+        WHERE task_stage IS NOT NULL
+          AND task_stage != ''
+          AND task_stage NOT IN ({placeholders})
+        """,
+        valid_stages,
+    )
+
+    missing = "(task_stage IS NULL OR task_stage='')"
+    done_conditions = ["COALESCE(status, '') = 'done'", "COALESCE(archived, 0) = 1"]
+    if "completed" in columns:
+        done_conditions.append("COALESCE(completed, 0) = 1")
+
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage='done'
+        WHERE {missing}
+          AND ({" OR ".join(done_conditions)})
+        """
+    )
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage='planned'
+        WHERE {missing}
+          AND deadline IS NOT NULL
+          AND deadline != ''
+        """
+    )
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage='idea'
+        WHERE {missing}
+        """
+    )
+
+    if apply_lab_os_seed or lab_os_task_stage_seed_needed(cursor, columns):
+        apply_lab_os_task_stage_seed(cursor, columns)
+
+
+def lab_os_task_stage_seed_needed(cursor, columns):
+    active_condition = _active_task_condition(columns)
+    row = cursor.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(
+                CASE
+                    WHEN COALESCE(task_stage, '') NOT IN ('', 'idea') THEN 1
+                    ELSE 0
+                END
+            ) AS classified
+        FROM tasks
+        WHERE project_id IN (SELECT id FROM projects WHERE name=?)
+          AND {active_condition}
+        """,
+        (LAB_OS_PROJECT_NAME,),
+    ).fetchone()
+
+    return bool(row and row["total"] and not row["classified"])
+
+
+def apply_lab_os_task_stage_seed(cursor, columns):
+    active_condition = _active_task_condition(columns)
+    project_condition = "project_id IN (SELECT id FROM projects WHERE name=?)"
+
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage='planned'
+        WHERE {project_condition}
+          AND {active_condition}
+        """,
+        (LAB_OS_PROJECT_NAME,),
+    )
+    set_task_stage_by_title_keywords(
+        cursor,
+        "planned",
+        LAB_OS_PLANNED_STAGE_KEYWORDS,
+        project_condition,
+        active_condition,
+    )
+    set_task_stage_by_title_keywords(
+        cursor,
+        "operational",
+        LAB_OS_OPERATIONAL_STAGE_KEYWORDS,
+        project_condition,
+        active_condition,
+    )
+    set_task_stage_by_title_keywords(
+        cursor,
+        "idea",
+        LAB_OS_IDEA_STAGE_KEYWORDS,
+        project_condition,
+        active_condition,
+    )
+
+
+def set_task_stage_by_title_keywords(
+    cursor, stage, keywords, project_condition, active_condition
+):
+    if not keywords:
+        return
+
+    keyword_clause = " OR ".join(["title LIKE ?"] * len(keywords))
+    cursor.execute(
+        f"""
+        UPDATE tasks
+        SET task_stage=?
+        WHERE {project_condition}
+          AND {active_condition}
+          AND ({keyword_clause})
+        """,
+        tuple([stage, LAB_OS_PROJECT_NAME] + [f"%{keyword}%" for keyword in keywords]),
+    )
 
 
 def ensure_student_meetings_table(cursor):
@@ -696,6 +887,7 @@ def fetch_home_tasks(cursor):
             tasks.priority AS priority,
             tasks.original_deadline AS original_deadline,
             tasks.archived AS archived,
+            tasks.task_stage AS task_stage,
             tasks.student_id AS student_id,
             tasks.source_url AS source_url,
             tasks.scrapbox_url AS scrapbox_url,
@@ -719,7 +911,8 @@ def fetch_home_task_rows(
             projects.name AS project_name,
             tasks.deadline AS deadline,
             tasks.priority AS priority,
-            tasks.original_deadline AS original_deadline
+            tasks.original_deadline AS original_deadline,
+            tasks.task_stage AS task_stage
         FROM tasks
         LEFT JOIN projects ON tasks.project_id = projects.id
         WHERE tasks.status != 'done'
@@ -758,7 +951,7 @@ def fetch_inbox_project_id(cursor):
 def fetch_inbox_tasks(cursor, inbox_id):
     return cursor.execute(
         """
-        SELECT tasks.id, tasks.title, tasks.deadline, tasks.priority
+        SELECT tasks.id, tasks.title, tasks.deadline, tasks.priority, tasks.task_stage
         FROM tasks
         WHERE project_id=? AND tasks.status != 'done'
         ORDER BY tasks.deadline IS NULL, tasks.deadline
@@ -807,7 +1000,13 @@ def move_tasks_to_project(cursor, task_ids, new_project_id):
 
 
 def update_task_deadline_and_priority(
-    cursor, task_id, new_deadline, make_high, priority_submitted=False
+    cursor,
+    task_id,
+    new_deadline,
+    make_high,
+    priority_submitted=False,
+    task_stage=None,
+    task_stage_submitted=False,
 ):
     current = cursor.execute(
         "SELECT deadline FROM tasks WHERE id=?", (task_id,)
@@ -829,6 +1028,12 @@ def update_task_deadline_and_priority(
         cursor.execute(
             "UPDATE tasks SET priority=? WHERE id=?",
             ("high" if make_high == "high" else "medium", task_id),
+        )
+
+    if task_stage_submitted:
+        cursor.execute(
+            "UPDATE tasks SET task_stage=? WHERE id=?",
+            (normalize_task_stage(task_stage), task_id),
         )
 
 
@@ -865,6 +1070,7 @@ def fetch_student_log_rows(cursor, student_id, student_names=None):
             tasks.deadline AS deadline, tasks.priority AS priority,
             tasks.original_deadline AS original_deadline,
             tasks.archived AS archived,
+            tasks.task_stage AS task_stage,
             tasks.source_url AS source_url,
             tasks.scrapbox_url AS scrapbox_url,
             projects.id AS project_id, projects.name AS project_name,
@@ -988,11 +1194,36 @@ def insert_project(cursor, name, type_):
     )
 
 
-def insert_task(cursor, title, project_id, deadline, priority, student_id, status="todo"):
+def insert_task(
+    cursor,
+    title,
+    project_id,
+    deadline,
+    priority,
+    student_id,
+    status="todo",
+    task_stage=None,
+):
     student_id = student_id or None
+    task_stage = normalize_task_stage(task_stage, status=status, deadline=deadline)
     cursor.execute(
-        "INSERT INTO tasks (title, status, project_id, deadline, original_deadline, student_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (title, status, project_id, deadline, deadline, student_id, priority),
+        """
+        INSERT INTO tasks (
+            title, status, project_id, deadline, original_deadline, student_id,
+            priority, task_stage
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            title,
+            status,
+            project_id,
+            deadline,
+            deadline,
+            student_id,
+            priority,
+            task_stage,
+        ),
     )
 
 
@@ -1089,7 +1320,10 @@ def mark_task_done(cursor, task_id):
     if not task:
         return
 
-    cursor.execute("UPDATE tasks SET status='done' WHERE id=?", (task_id,))
+    cursor.execute(
+        "UPDATE tasks SET status='done', task_stage='done' WHERE id=?",
+        (task_id,),
+    )
     if task["status"] != "done":
         generate_completion_triggered_tasks(cursor, task)
 
@@ -1197,7 +1431,11 @@ def merge_project_tasks(
     )
 
     cursor.execute(
-        f"UPDATE tasks SET archived=1, source_type='manual_merge' WHERE id IN ({merge_placeholders})",
+        f"""
+        UPDATE tasks
+        SET archived=1, task_stage='done', source_type='manual_merge'
+        WHERE id IN ({merge_placeholders})
+        """,
         tuple(merge_task_ids),
     )
 
@@ -1229,7 +1467,7 @@ def fetch_project_detail_rows(cursor, project_id, task_id_filter=None):
         SELECT id AS task_id, title, status, deadline, priority, archived,
                project_id,
                original_deadline, sync_key, source_type, source_updated_at,
-               source_url, scrapbox_url, student_id
+               source_url, scrapbox_url, task_stage, student_id
         FROM tasks
         WHERE project_id=?
         ORDER BY deadline IS NULL, deadline
@@ -1292,9 +1530,9 @@ def insert_imported_task(cursor, task):
             INSERT INTO tasks (
                 title, status, project_id, deadline, original_deadline,
                 student_id, priority, sync_key, source_type, source_updated_at,
-                source_url, scrapbox_url, archived
+                source_url, scrapbox_url, task_stage, archived
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task.get("title"),
@@ -1309,6 +1547,12 @@ def insert_imported_task(cursor, task):
             task.get("source_updated_at"),
             task.get("source_url"),
             task.get("scrapbox_url"),
+            normalize_task_stage(
+                task.get("task_stage"),
+                status=task.get("status", "todo"),
+                archived=int(task.get("archived", 0)),
+                deadline=task.get("deadline"),
+            ),
             int(task.get("archived", 0)),
         ),
     )

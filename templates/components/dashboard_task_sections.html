@@ -4,6 +4,36 @@
 {% set ns = namespace(color_map={}) %}
 {% set colors = ['#4caf50','#2196f3','#ff9800','#9c27b0','#f44336','#009688'] %}
 
+<style>
+  .task-stage-list {
+    margin: 8px 0 0 18px;
+  }
+
+  .task-stage {
+    border-left: 3px solid #ddd;
+    margin: 6px 0;
+    padding-left: 8px;
+  }
+
+  .task-stage summary {
+    cursor: pointer;
+    color: #444;
+    font-weight: 600;
+    line-height: 1.7;
+  }
+
+  .task-stage-count {
+    color: #777;
+    font-size: 0.85em;
+    font-weight: normal;
+  }
+
+  .task-stage-empty summary {
+    color: #999;
+    font-weight: normal;
+  }
+</style>
+
 {% macro project_move_header(project, project_id, color, form_id, projects) %}
   <div
     style="display:block; border-left:6px solid {{ color }}; background:{{ color }}22; padding:8px 12px; margin-top:16px; border-radius:4px;"
@@ -102,11 +132,24 @@
   {% set project_id = items[0]["project_id"] if items and items[0]["project_id"] else none %}
   {% set form_id = "bulk-anytime-" ~ loop.index %}
   {{ project_move_header(project, project_id, color, form_id, projects) }}
-  <ul>
-    {% for t in items %}
-      {{ render_task_item(t, show_deadline=true, allow_update=true, show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
+  <div class="task-stage-list">
+    {% for stage in task_stages %}
+      {% set stage_items = items|selectattr("task_stage", "equalto", stage["value"])|list %}
+      <details class="task-stage {% if not stage_items %}task-stage-empty{% endif %}" {% if stage_items %}open{% endif %}>
+        <summary>
+          {{ stage["label"] }}
+          <span class="task-stage-count">({{ stage_items|length }})</span>
+        </summary>
+        {% if stage_items %}
+          <ul>
+            {% for t in stage_items %}
+              {{ render_task_item(t, show_deadline=true, allow_update=true, show_move=false, projects=projects, show_note_link=true, bulk_move_form_id=form_id) }}
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </details>
     {% endfor %}
-  </ul>
+  </div>
 {% endfor %}
 
 <hr />

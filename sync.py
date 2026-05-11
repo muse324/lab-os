@@ -8,6 +8,7 @@ from db import (
     fetch_inbox_project_id,
     generate_completion_triggered_tasks,
     insert_note,
+    normalize_task_stage,
 )
 from task_parser import normalize_quotes, resolve_project_id_from_text
 
@@ -590,6 +591,12 @@ def normalize_sync_item(item, cursor, students_data=None):
         "student_id": item.get("student_id"),
         "priority": item.get("priority", "medium"),
         "status": item.get("status", "todo"),
+        "task_stage": normalize_task_stage(
+            item.get("task_stage"),
+            status=item.get("status", "todo"),
+            archived=int(item.get("archived", 0)),
+            deadline=item.get("deadline"),
+        ),
         "archived": int(item.get("archived", 0)),
         "source_type": item.get("source_type", "manual_json"),
         "source_updated_at": item.get("source_updated_at"),
@@ -612,6 +619,7 @@ def merge_normalized_task(existing, incoming):
         "student_id",
         "priority",
         "status",
+        "task_stage",
         "archived",
         "source_type",
         "source_updated_at",
@@ -694,9 +702,9 @@ def create_task_from_sync(cursor, normalized):
         INSERT INTO tasks (
             title, status, deadline, original_deadline, project_id, student_id,
             priority, sync_key, source_type, source_updated_at, source_url,
-            scrapbox_url, archived
+            scrapbox_url, task_stage, archived
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             normalized["title"],
@@ -711,6 +719,7 @@ def create_task_from_sync(cursor, normalized):
             normalized["source_updated_at"],
             normalized.get("source_url"),
             normalized.get("scrapbox_url"),
+            normalized["task_stage"],
             normalized["archived"],
         ),
     )
@@ -910,7 +919,10 @@ def apply_sync_diff(cursor, diff):
         upsert_imported_task_note(cursor, item["task_id"], item.get("normalized", {}))
 
     for item in diff["archive"]:
-        cursor.execute("UPDATE tasks SET archived=1 WHERE id=?", (item["task_id"],))
+        cursor.execute(
+            "UPDATE tasks SET archived=1, task_stage='done' WHERE id=?",
+            (item["task_id"],),
+        )
         cursor.execute(
             """
             INSERT INTO sync_history (

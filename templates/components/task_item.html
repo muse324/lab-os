@@ -91,6 +91,18 @@
 {% endif %}
 {% endmacro %}
 
+{% macro task_stage_select(t) %}
+{% set current_stage = t["task_stage"] if t["task_stage"] is defined and t["task_stage"] else "idea" %}
+<input type="hidden" name="task_stage_present" value="1" />
+<select name="task_stage" title="状態" style="max-width:92px;">
+  {% for stage in task_stages %}
+  <option value="{{ stage['value'] }}" {% if stage["value"] == current_stage %}selected{% endif %}>
+    {{ stage["label"] }}
+  </option>
+  {% endfor %}
+</select>
+{% endmacro %}
+
 {% macro task_actions(t, show_done=true, show_update=false, is_done=false, show_move=false, projects=none) %}
 {% set task_id = task_id_value(t)|trim %}
 <form action="/edit_task_title" method="post" class="inline-edit-form" style="display:inline; margin-left:6px;">
@@ -127,6 +139,7 @@
     <input type="checkbox" name="priority" value="high" {% if t["priority"]=="high" %}checked{% endif %} />
     重要
   </label>
+  {{ task_stage_select(t) }}
   <button type="submit">更新</button>
 </form>
 {% endif %}

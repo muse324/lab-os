@@ -36,6 +36,8 @@ from db import (
     move_task_to_project,
     move_tasks_to_project,
     sync_student_meetings_from_tasks,
+    TASK_STAGE_DEFINITIONS,
+    TASK_STAGE_LABELS,
     update_task_deadline_and_priority,
     update_task_title as update_task_title_row,
     upsert_student_research_theme,
@@ -219,6 +221,14 @@ def inject_scrapbox_helpers():
         "scrapbox_page_url": scrapbox_page_url,
         "scrapbox_project_page_url": scrapbox_project_page_url,
         "scrapbox_base_url": f"https://scrapbox.io/{SCRAPBOX_PROJECT}/",
+    }
+
+
+@app.context_processor
+def inject_task_stage_helpers():
+    return {
+        "task_stages": TASK_STAGE_DEFINITIONS,
+        "task_stage_labels": TASK_STAGE_LABELS,
     }
 
 
@@ -528,6 +538,9 @@ def apply_format(rows):
             and int(d.get("archived") or 0) == 0
             and is_deadline_soon(d.get("deadline"), today)
         )
+        task_stage = d.get("task_stage") or "idea"
+        d["task_stage"] = task_stage
+        d["task_stage_label"] = TASK_STAGE_LABELS.get(task_stage, task_stage)
 
         result.append(d)
 
@@ -792,13 +805,21 @@ def update_task():
     new_deadline = request.form.get("deadline")
     make_high = request.form.get("priority")
     priority_submitted = request.form.get("priority_present") == "1"
+    task_stage = request.form.get("task_stage")
+    task_stage_submitted = request.form.get("task_stage_present") == "1"
     next_url = request.form.get("next")
 
     conn = get_db()
     c = conn.cursor()
 
     update_task_deadline_and_priority(
-        c, task_id, new_deadline, make_high, priority_submitted
+        c,
+        task_id,
+        new_deadline,
+        make_high,
+        priority_submitted,
+        task_stage,
+        task_stage_submitted,
     )
     conn.commit()
     conn.close()

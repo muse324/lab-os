@@ -120,7 +120,7 @@
             });
         }
     </script>
-    {% from "components/task_item.html" import edit_form, task_actions, bulk_project_move_form, task_bulk_move_checkbox with context %}
+    {% from "components/task_item.html" import edit_form, task_actions, bulk_project_move_form, task_bulk_move_checkbox, task_stage_select with context %}
 
 
 <h1>{{ project["name"] }}</h1>
@@ -230,6 +230,7 @@
                 <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
                 重要
             </label>
+            {{ task_stage_select(t) }}
             <button type="submit">更新</button>
         </form>
         {% if t["related_notes"] %}
@@ -274,6 +275,7 @@
                 <input type="checkbox" name="priority" value="high" {% if t["priority"] == "high" %}checked{% endif %}>
                 重要
             </label>
+            {{ task_stage_select(t) }}
             <button type="submit">更新</button>
         </form>
         {% if t["related_notes"] %}
