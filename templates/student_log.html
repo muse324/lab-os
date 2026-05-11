@@ -8,18 +8,22 @@
       margin-right: 8px;
     }
 
-    .scrapbox-text {
-      background: #f8f8f8;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      max-height: 480px;
-      overflow: auto;
-      padding: 12px;
-      white-space: pre-wrap;
-    }
-
     .notice {
       color: #777;
+    }
+
+    .scrapbox-link-list {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .scrapbox-link-list li {
+      margin: 6px 0;
+    }
+
+    .scrapbox-link-label {
+      display: inline-block;
+      min-width: 90px;
     }
 
     .meeting-list {
@@ -70,7 +74,7 @@
   <h2>Links</h2>
   <p class="student-links">
     {% for link_id, link in links.items() %}
-    <a href="{{ link[" url"] }}" {% if link["external"] %}target="_blank" rel="noopener noreferrer" {% endif %}>{{
+    <a href="{{ link['url'] }}" {% if link["external"] %}target="_blank" rel="noopener noreferrer" {% endif %}>{{
       link["label"] }}</a>
     {% endfor %}
   </p>
@@ -179,15 +183,18 @@
     {% endfor %}
   </ul>
 
-  <h2>musestudio</h2>
-  {% if musestudio_text["text"] %}
-  <details open>
-    <summary>Scrapbox本文</summary>
-    <pre class="scrapbox-text">{{ musestudio_text["text"] }}</pre>
-  </details>
-  {% else %}
-  <p class="notice">Scrapbox本文は取得できませんでした。編集・確認は musestudio で行ってください。</p>
-  {% endif %}
+  <h2>Scrapbox</h2>
+  <p class="notice">private Scrapbox の本文は取得しません。編集・確認は外部 Scrapbox で行ってください。</p>
+  <ul class="scrapbox-link-list">
+    {% for link_id, link in scrapbox_links.items() %}
+    <li>
+      <span class="scrapbox-link-label">{{ link["label"] }}:</span>
+      <a href="{{ link['url'] }}" target="_blank" rel="noopener noreferrer">開く</a>
+    </li>
+    {% else %}
+    <li>Scrapboxリンクはありません。</li>
+    {% endfor %}
+  </ul>
 
   <h2>締切変更履歴</h2>
   <ul>

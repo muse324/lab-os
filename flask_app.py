@@ -4,7 +4,6 @@ import json
 import os
 import requests
 import csv
-from difflib import get_close_matches
 from datetime import datetime
 from urllib.parse import quote
 from dateutil.relativedelta import relativedelta
@@ -71,15 +70,10 @@ app = Flask(__name__)  # ← これが最重要
 MUSELAB_PROJECT = os.getenv("MUSELAB_PROJECT", "muselab")
 MUSESTUDIO_PROJECT = os.getenv("MUSESTUDIO_PROJECT", "musestudio")
 SCRAPBOX_PROJECT = os.getenv("SCRAPBOX_PROJECT", MUSESTUDIO_PROJECT)
-SCRAPBOX_SEARCH_TIMEOUT = 2
-SCRAPBOX_TITLE_CACHE = {}
 DEADLINE_SOON_DAYS = 3
 
 
-def normalize_scrapbox_page_title(title):
-    return " ".join((title or "").strip().split())
-
-
+# Scrapboxはprivate運用前提のため、OS側では本文/API取得を行わずURL導線だけを扱う。
 def scrapbox_project_page_url(project, title):
     page_name = (title or "").strip()
     if not page_name:
@@ -89,50 +83,6 @@ def scrapbox_project_page_url(project, title):
 
 def scrapbox_page_url(title):
     return scrapbox_project_page_url(SCRAPBOX_PROJECT, title)
-
-
-def scrapbox_request_headers():
-    cookie = os.getenv("SCRAPBOX_COOKIE", "").strip()
-    if cookie:
-        return {"Cookie": cookie}
-
-    connect_sid = os.getenv("SCRAPBOX_CONNECT_SID", "").strip()
-    if connect_sid:
-        return {"Cookie": f"connect.sid={connect_sid}"}
-
-    return {}
-
-
-def fetch_scrapbox_page_text(project, title):
-    page_name = (title or "").strip()
-    if not page_name:
-        return {"text": "", "error": "no_title"}
-
-    url = (
-        f"https://scrapbox.io/api/pages/"
-        f"{quote(project, safe='')}/{quote(page_name, safe='')}/text"
-    )
-
-    try:
-        res = requests.get(
-            url,
-            headers=scrapbox_request_headers(),
-            timeout=SCRAPBOX_SEARCH_TIMEOUT,
-        )
-        if res.status_code == 404:
-            return {"text": "", "error": "not_found"}
-        if res.status_code in (401, 403):
-            return {"text": "", "error": "access_denied"}
-        res.raise_for_status()
-    except requests.RequestException:
-        return {"text": "", "error": "unavailable"}
-
-    content_type = getattr(res, "headers", {}).get("Content-Type", "")
-    if content_type and "text/plain" not in content_type:
-        return {"text": "", "error": "unexpected_response"}
-
-    res.encoding = res.encoding or "utf-8"
-    return {"text": res.text.strip(), "error": ""}
 
 
 def student_log_url(student_id, name):
@@ -162,57 +112,6 @@ def student_links(student_id, name, muselab_page_title):
         }
 
     return links
-
-
-def fetch_scrapbox_search_pages(project, query):
-    url = f"https://scrapbox.io/api/pages/{quote(project, safe='')}/search/query"
-    res = requests.get(url, params={"q": query}, timeout=SCRAPBOX_SEARCH_TIMEOUT)
-    res.raise_for_status()
-    data = res.json()
-    if not isinstance(data, dict):
-        return []
-    return data.get("pages", [])
-
-
-def resolve_scrapbox_page_title(project, title):
-    normalized_title = normalize_scrapbox_page_title(title)
-    if not normalized_title:
-        return ""
-
-    cache_key = (project, normalized_title)
-    if cache_key in SCRAPBOX_TITLE_CACHE:
-        return SCRAPBOX_TITLE_CACHE[cache_key]
-
-    resolved_title = normalized_title
-    candidate_titles = []
-
-    for query in (f'"{normalized_title}"', normalized_title):
-        try:
-            pages = fetch_scrapbox_search_pages(project, query)
-        except Exception:
-            continue
-
-        for page in pages:
-            page_title = page.get("title")
-            if not page_title:
-                continue
-            candidate_titles.append(page_title)
-            if normalize_scrapbox_page_title(page_title) == normalized_title:
-                SCRAPBOX_TITLE_CACHE[cache_key] = page_title
-                return page_title
-
-    unique_candidates = list(dict.fromkeys(candidate_titles))
-    close_matches = get_close_matches(
-        normalized_title,
-        unique_candidates,
-        n=1,
-        cutoff=0.9,
-    )
-    if close_matches:
-        resolved_title = close_matches[0]
-
-    SCRAPBOX_TITLE_CACHE[cache_key] = resolved_title
-    return resolved_title
 
 
 @app.context_processor
@@ -899,9 +798,7 @@ def update_student_research_theme():
     if student_id is None:
         return redirect("/students?theme=failed")
 
-    muselab_page_title = ""
-    if research_theme:
-        muselab_page_title = resolve_scrapbox_page_title(MUSELAB_PROJECT, research_theme)
+    muselab_page_title = research_theme
 
     conn = get_db()
     c = conn.cursor()
@@ -962,14 +859,16 @@ def student_log():
     meetings = format_student_meeting_rows(meetings)
     notes = [dict(n) for n in notes]
     links = student_links(student_id, student_name, muselab_page_title)
-    musestudio_text = fetch_scrapbox_page_text(MUSESTUDIO_PROJECT, student_name)
+    scrapbox_links = {
+        link_id: link for link_id, link in links.items() if link.get("external")
+    }
 
     return render_template(
         "student_log.html",
         student_name=student_name,
         student_id=student_id,
         links=links,
-        musestudio_text=musestudio_text,
+        scrapbox_links=scrapbox_links,
         tasks=tasks,
         meetings=meetings,
         notes=notes,

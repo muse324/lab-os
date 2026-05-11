@@ -46,12 +46,12 @@
   <section style="border-top:1px solid #ccc; padding-top:8px; margin-top:8px;">
     <h3 style="margin:0 0 6px;">作業メモ</h3>
     <label for="memoInput" style="display:block; font-size:0.9em;"
-      >GPT/Scrapboxと受け渡すテキスト</label
+      >GPTや外部ノートと受け渡すテキスト</label
     >
     <textarea
       id="memoInput"
       name="memo"
-      placeholder="OSから出したメモ、GPTの返答、Scrapbox本文をここに置く"
+      placeholder="OSから出したメモ、GPTの返答、外部ノート用の作業テキストをここに置く"
       style="width:100%; height:130px; box-sizing:border-box;"
     ></textarea>
     <div
@@ -140,9 +140,9 @@
       <button
         type="button"
         onclick="copyMemoToClipboard()"
-        title="GPTが作ったScrapbox本文など、作業メモ欄の内容をScrapboxへ貼るためにコピーします"
+        title="作業メモ欄の内容を外部ノートへ貼るためにコピーします"
       >
-        作業メモをScrapbox用にコピー
+        作業メモを外部ノート用にコピー
       </button>
       <select
         id="snapshotProject"
